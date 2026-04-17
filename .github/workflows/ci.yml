@@ -35,4 +35,4 @@ jobs:
       - name: pip-audit
         run: |
           python -m pip install --upgrade pip-audit
-          pip-audit -r requirements.txt --strict --disable-pip
+          pip-audit -r requirements.txt --strict
