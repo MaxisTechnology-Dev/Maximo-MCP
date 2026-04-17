@@ -1,0 +1,70 @@
+# config/rbac_policies.yaml
+# Tool-to-role mapping for Maximo Enterprise MCP
+# Roles (ascending privilege): readonly < technician < supervisor < manager < admin
+# A user with a higher role inherits all permissions of lower roles.
+
+tools:
+  # ── Read-only tools (any authenticated user) ──────────────────────────────
+  health_check: [readonly, technician, supervisor, manager, admin]
+  list_assets: [readonly, technician, supervisor, manager, admin]
+  get_asset: [readonly, technician, supervisor, manager, admin]
+  search_assets: [readonly, technician, supervisor, manager, admin]
+  get_asset_history: [readonly, technician, supervisor, manager, admin]
+  get_asset_downtime_stats: [readonly, technician, supervisor, manager, admin]
+  list_workorders: [readonly, technician, supervisor, manager, admin]
+  get_workorder: [readonly, technician, supervisor, manager, admin]
+  get_workorder_kpis: [readonly, supervisor, manager, admin]
+  list_pm_schedules: [readonly, technician, supervisor, manager, admin]
+  get_pm_forecast: [readonly, supervisor, manager, admin]
+  check_stock_level: [readonly, technician, supervisor, manager, admin]
+  list_low_stock_items: [readonly, supervisor, manager, admin]
+  get_reorder_recommendations: [readonly, supervisor, manager, admin]
+  get_purchase_order: [readonly, supervisor, manager, admin]
+  get_vendor_performance: [readonly, supervisor, manager, admin]
+  list_object_structures: [readonly, technician, supervisor, manager, admin]
+  get_schema_details: [readonly, technician, supervisor, manager, admin]
+  validate_oslc_query: [readonly, technician, supervisor, manager, admin]
+  generate_api_code: [readonly, technician, supervisor, manager, admin]
+  list_event_subscriptions: [readonly, supervisor, manager, admin]
+
+  # ── Technician tools (field work) ─────────────────────────────────────────
+  create_workorder: [technician, supervisor, manager, admin]
+  update_workorder: [technician, supervisor, manager, admin]
+  close_workorder: [technician, supervisor, manager, admin]
+  assign_technician: [supervisor, manager, admin]
+  create_material_request: [technician, supervisor, manager, admin]
+  transfer_inventory: [supervisor, manager, admin]
+  ingest_iot_alert: [technician, supervisor, manager, admin]
+
+  # ── AI intelligence tools ─────────────────────────────────────────────────
+  nl_to_oslc_query: [technician, supervisor, manager, admin]
+  detect_asset_anomalies: [supervisor, manager, admin]
+  suggest_root_cause: [technician, supervisor, manager, admin]
+  summarize_asset_health: [technician, supervisor, manager, admin]
+  search_maximo_knowledge: [readonly, technician, supervisor, manager, admin]
+
+  # ── Supervisor tools ──────────────────────────────────────────────────────
+  approve_workorder: [supervisor, manager, admin]
+  cancel_workorder: [supervisor, manager, admin]
+  generate_pm_workorders: [supervisor, manager, admin]
+  update_pm_frequency: [supervisor, manager, admin]
+
+  # ── Manager / reporting tools ─────────────────────────────────────────────
+  get_maintenance_kpi_dashboard: [manager, admin]
+  export_workorders_excel: [supervisor, manager, admin]
+  export_asset_report_pdf: [supervisor, manager, admin]
+  generate_carbon_table: [readonly, technician, supervisor, manager, admin]
+  create_purchase_order: [manager, admin]
+  receive_items: [supervisor, manager, admin]
+
+  # ── Admin-only tools ──────────────────────────────────────────────────────
+  create_asset: [admin]
+  update_asset: [supervisor, manager, admin]
+  retire_asset: [manager, admin]
+  build_custom_object_structure: [admin]
+  subscribe_to_event: [admin]
+  trigger_webhook: [admin]
+  list_users: [admin]
+  get_user: [manager, admin]
+  list_security_groups: [admin]
+  query_audit_log: [manager, admin]

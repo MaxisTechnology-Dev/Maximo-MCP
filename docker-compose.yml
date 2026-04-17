@@ -1,0 +1,65 @@
+services:
+  maximo-mcp:
+    build: .
+    container_name: maximo-enterprise-mcp
+    ports:
+      - "8080:8080"
+    environment:
+      - TRANSPORT_MODE=http
+      - HTTP_PORT=8080
+      - HTTP_HOST=0.0.0.0
+      - REDIS_URL=redis://redis:6379
+      # Set REDIS_PASSWORD here and in the redis service command below to enable Redis AUTH
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      # MCP HTTP bearer token — set to a strong random string for auth protection
+      - MCP_ACCESS_TOKEN=${MCP_ACCESS_TOKEN:-}
+      # Override these with your actual values or use .env file:
+      - MAXIMO_URL=${MAXIMO_URL}
+      - MAXIMO_HOST=${MAXIMO_HOST}
+      - AUTH_MODE=${AUTH_MODE:-basic}
+      - MAXIMO_USERNAME=${MAXIMO_USERNAME}
+      - MAXIMO_PASSWORD=${MAXIMO_PASSWORD}
+      - MAXIMO_API_KEY=${MAXIMO_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - CURRENT_USER_ROLE=${CURRENT_USER_ROLE:-readonly}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - RBAC_ENABLED=${RBAC_ENABLED:-true}
+    volumes:
+      - ./logs:/app/logs
+      - ./chroma_db:/app/chroma_db
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  redis:
+    image: redis:7-alpine
+    container_name: maximo-mcp-redis
+    volumes:
+      - redis_data:/data
+    # If REDIS_PASSWORD is set, Redis requires AUTH on every connection.
+    # The healthcheck uses redis-cli with the password so it stays green.
+    command: >
+      sh -c "if [ -n \"$$REDIS_PASSWORD\" ];
+             then redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru --requirepass $$REDIS_PASSWORD;
+             else redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru;
+             fi"
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+    healthcheck:
+      test: >
+        ["CMD-SHELL", "if [ -n \"$$REDIS_PASSWORD\" ]; then redis-cli -a $$REDIS_PASSWORD ping; else redis-cli ping; fi"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+    driver: local

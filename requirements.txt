@@ -1,0 +1,28 @@
+# ── Core MCP framework ────────────────────────────────────────────────────────
+fastmcp>=2.0.0
+fastapi>=0.135.0
+starlette>=0.49.1,<1.0.0
+
+# ── HTTP client ───────────────────────────────────────────────────────────────
+httpx>=0.27.0
+
+# ── Settings / config ─────────────────────────────────────────────────────────
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+
+# ── Caching ───────────────────────────────────────────────────────────────────
+redis>=5.0.0
+
+# ── YAML (for RBAC policies) ──────────────────────────────────────────────────
+PyYAML>=6.0
+
+# ── Inbound JWT validation (MCP_AUTH_MODE = jwt | both) ───────────────────────
+pyjwt[crypto]>=2.8.0
+
+# ── Standard library extras ───────────────────────────────────────────────────
+python-dateutil>=2.9.0
+uvicorn>=0.30.0
+
+# Optional extras now live in pyproject.toml:
+#   pip install ".[ai]"      # OpenAI, ChromaDB, sentence-transformers
+#   pip install ".[exports]" # openpyxl, reportlab

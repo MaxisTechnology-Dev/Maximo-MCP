@@ -1,0 +1,27 @@
+.env
+.env.*
+!.env.example
+*.pyc
+__pycache__/
+*.egg-info/
+.pytest_cache/
+logs/
+chroma_db/
+reports/
+integration_output*.txt
+TEST_RESULTS.md
+INTEGRATION_RESULTS.md
+*.jsonl
+dist/
+build/
+.venv/
+venv/
+.mcp.json
+.cursor/mcp.json
+
+# Dev / QA scratch — must never be committed
+_qa_*.py
+_tmp_*.py
+* copy.py
+* copy.*.py
+*.tmp.py
