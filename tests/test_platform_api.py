@@ -1,10 +1,13 @@
 import pytest
 
-# starlette 0.49+ TestClient does `httpx.Response` at module-import time,
-# which fails when the resolved starlette/httpx pair is mismatched. Skip the
-# whole module rather than break collection. Once the starlette<2.0.0 widening
-# (see Dependabot PR) lands and dep resolution stabilizes, this can be removed.
-TestClient = pytest.importorskip("fastapi.testclient").TestClient
+# starlette.testclient accesses httpx.Response at import time; on some resolved
+# dep combinations the attribute is missing, raising AttributeError rather than
+# ImportError.  pytest.importorskip only intercepts ImportError, so we use an
+# explicit try/except to skip cleanly in either failure mode.
+try:
+    from fastapi.testclient import TestClient
+except (ImportError, AttributeError) as _e:
+    pytest.skip(f"fastapi.testclient unavailable ({_e})", allow_module_level=True)
 
 from unittest.mock import AsyncMock, patch  # noqa: E402
 
