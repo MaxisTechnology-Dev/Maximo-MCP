@@ -17,7 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml requirements.txt ./
-RUN pip install --upgrade pip && \
+RUN pip install --upgrade pip "setuptools>=80.0" "wheel>=0.46.2" && \
     pip install -r requirements.txt
 
 COPY . .
@@ -41,6 +41,8 @@ WORKDIR /app
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 COPY --from=builder /app /app
+
+RUN apt-get update && apt-get upgrade -y --no-install-recommends && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p logs chroma_db && \
     useradd -m -u 1000 mcpuser && \
