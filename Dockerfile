@@ -3,7 +3,7 @@
 # Stage 1: builder — installs build toolchain, compiles & installs deps.
 # Nothing from this stage ships in the final image.
 # ──────────────────────────────────────────────────────────────────────
-FROM python:3.11-slim AS builder
+FROM python:3.14-slim AS builder
 
 ENV PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
@@ -27,7 +27,7 @@ RUN pip install --no-deps .
 # Stage 2: runtime — slim base, no compilers, no curl. Healthcheck uses
 # python's stdlib so we drop curl from the runtime layer entirely.
 # ──────────────────────────────────────────────────────────────────────
-FROM python:3.11-slim
+FROM python:3.14-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
