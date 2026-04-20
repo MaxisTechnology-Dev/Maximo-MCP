@@ -44,6 +44,11 @@ COPY --from=builder /app /app
 
 RUN apt-get update && apt-get upgrade -y --no-install-recommends && rm -rf /var/lib/apt/lists/*
 
+# Ensure build tools in the runtime layer match upgraded versions from builder.
+# python:3.11-slim ships old pip/wheel/setuptools; COPY --from=builder merges
+# rather than replaces, so stale dist-info dirs can remain alongside new ones.
+RUN pip install --upgrade "wheel>=0.46.2" "setuptools>=80.0.0"
+
 RUN mkdir -p logs chroma_db && \
     useradd -m -u 1000 mcpuser && \
     chown -R mcpuser:mcpuser /app

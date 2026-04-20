@@ -68,6 +68,7 @@ jobs:
           output: "trivy-results.sarif"
           severity: "CRITICAL,HIGH"
           ignore-unfixed: true
+          trivyignores: ".trivyignore"
           exit-code: "0"
 
       - name: Upload SARIF
@@ -84,4 +85,5 @@ jobs:
           format: "table"
           severity: "CRITICAL,HIGH"
           ignore-unfixed: true
+          trivyignores: ".trivyignore"
           exit-code: "1"
