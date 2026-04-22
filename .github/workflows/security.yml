@@ -1,0 +1,89 @@
+name: Security
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  schedule:
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Secret scan: catches committed credentials before merge.
+  gitleaks:
+    name: Gitleaks (committed-secret scan)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── Python dependency CVEs.
+  pip-audit:
+    name: pip-audit (Python CVEs)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install pip-audit
+        run: python -m pip install --upgrade pip pip-audit
+      - name: Audit requirements.txt
+        run: pip-audit -r requirements.txt --strict
+
+  # ── Container image CVEs. Builds the image so we scan exactly what ships.
+  trivy:
+    name: Trivy (container image CVE scan)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Build image
+        run: docker build -t maximo-enterprise-mcp:ci .
+
+      # Two-pass scan:
+      #   1) SARIF run: exit-code 0 so the file is always written, even when
+      #      vulns are present. Without this, a vuln-finding run exits non-zero
+      #      and Upload SARIF below errors with "Path does not exist".
+      #   2) Fail-gate run: exit-code 1 fails CI on CRITICAL/HIGH findings.
+      - name: Trivy scan (SARIF for code scanning tab)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: "maximo-enterprise-mcp:ci"
+          format: "sarif"
+          output: "trivy-results.sarif"
+          severity: "CRITICAL,HIGH"
+          ignore-unfixed: true
+          trivyignores: ".trivyignore"
+          exit-code: "0"
+
+      - name: Upload SARIF
+        if: always() && hashFiles('trivy-results.sarif') != ''
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: "trivy-results.sarif"
+
+      - name: Trivy scan (fail on CRITICAL/HIGH)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: "maximo-enterprise-mcp:ci"
+          format: "table"
+          severity: "CRITICAL,HIGH"
+          ignore-unfixed: true
+          trivyignores: ".trivyignore"
+          exit-code: "1"

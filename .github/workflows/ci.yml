@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Ruff syntax checks
+        run: ruff check . --select E9,F63,F7,F82
+
+      - name: Run unit tests
+        run: pytest -m "not integration"
+
+      # Lightweight dependency CVE scan in the same job. The full security
+      # workflow (.github/workflows/security.yml) is the authoritative scan
+      # and runs gitleaks + trivy on top.
+      - name: pip-audit
+        run: |
+          python -m pip install --upgrade pip-audit
+          pip-audit -r requirements.txt --strict

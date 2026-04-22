@@ -1,0 +1,16 @@
+# ── Vendored build-tool dependencies inside setuptools/_vendor/ ───────────────
+# These CVEs affect packages that setuptools vendors internally for its own
+# install-time operations.  They are NOT pip-managed and cannot be upgraded
+# independently; they are also never executed by the application at runtime.
+# The equivalent top-level packages in the image are already at patched versions
+# (jaraco_context-6.1.2, wheel>=0.46.2 — confirmed clean in the same scan).
+#
+# CVE-2026-23949 – path traversal in jaraco.context < 6.1.0
+#   Affected:  setuptools/_vendor/jaraco.context-5.3.0 (install-time only)
+#   Patched:   top-level jaraco_context-6.1.2 ✓
+CVE-2026-23949
+
+# CVE-2026-24049 – privilege escalation in wheel < 0.46.2
+#   Affected:  setuptools/_vendor/wheel-0.45.1 (install-time only)
+#   Patched:   top-level wheel>=0.46.2 installed in Dockerfile ✓
+CVE-2026-24049

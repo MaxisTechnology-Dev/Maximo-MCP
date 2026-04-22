@@ -1,0 +1,26 @@
+{
+  "mcpServers": {
+    "maximo": {
+      "command": "python",
+      "args": ["server.py"],
+      "env": {
+        "MAXIMO_URL": "https://your-maximo-host.example.com/maximo/oslc",
+        "MAXIMO_HOST": "https://your-maximo-host.example.com",
+        "AUTH_MODE": "basic",
+        "MAXIMO_USERNAME": "your-maximo-username",
+        "MAXIMO_PASSWORD": "your-maximo-password",
+        "HTTP_TIMEOUT_SECONDS": "120",
+        "HTTP_READ_TIMEOUT_SECONDS": "120",
+        "HTTP_CONNECT_TIMEOUT_SECONDS": "10",
+        "HTTP_WRITE_TIMEOUT_SECONDS": "60",
+        "HTTP_POOL_TIMEOUT_SECONDS": "30",
+        "HTTP_MAX_RETRIES": "2",
+        "HTTP_MAX_KEEPALIVE_CONNECTIONS": "0",
+        "TRANSPORT_MODE": "stdio",
+        "CURRENT_USER_ROLE": "readonly",
+        "VPN_SAFE_MODE": "true",
+        "DEFAULT_PAGE_SIZE": "10"
+      }
+    }
+  }
+}
