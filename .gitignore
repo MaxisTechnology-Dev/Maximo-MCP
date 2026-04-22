@@ -18,6 +18,8 @@ build/
 venv/
 .mcp.json
 .cursor/mcp.json
+.claude
+.cursor
 
 # Dev / QA scratch — must never be committed
 _qa_*.py
