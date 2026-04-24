@@ -1,5 +1,7 @@
 # Maximo Enterprise MCP
 
+<!-- mcp-name: io.github.MaxisTechnology-Dev/maximo-mcp -->
+
 Production-focused IBM Maximo Asset Management integration for AI systems.
 
 This project now exposes:
