@@ -58,7 +58,7 @@ logger = logging.getLogger(__name__)
 mcp = FastMCP(
     "Maximo Enterprise MCP",
     instructions=(
-        f"A production-focused IBM Maximo Asset Management MCP server with {ACTIVE_TOOL_COUNT} "
+        f"A production-focused MCP server for IBM Maximo Asset Management by Maxis Technology, with {ACTIVE_TOOL_COUNT} "
         "stable tools covering assets, work orders, inventory, purchasing, labor, "
         "locations, reporting, schema discovery, and administration. "
         f"Connected to: {settings.MAXIMO_URL}"
