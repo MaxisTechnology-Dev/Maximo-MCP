@@ -1,0 +1,67 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.MaxisTechnology-Dev/maximo-mcp",
+  "title": "Maximo Enterprise MCP",
+  "description": "IBM Maximo MCP server: assets, work orders, inventory, purchasing, labor, OSLC tools.",
+  "repository": {
+    "url": "https://github.com/MaxisTechnology-Dev/Maximo-MCP",
+    "source": "github"
+  },
+  "version": "0.1.1",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "maximo-enterprise-mcp",
+      "version": "0.1.1",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "MAXIMO_URL",
+          "description": "Maximo OSLC base URL (e.g. https://maximo.example.com/maximo/oslc)",
+          "isRequired": true,
+          "isSecret": false
+        },
+        {
+          "name": "MAXIMO_HOST",
+          "description": "Maximo host base URL (e.g. https://maximo.example.com)",
+          "isRequired": true,
+          "isSecret": false
+        },
+        {
+          "name": "AUTH_MODE",
+          "description": "Authentication mode: basic | apikey | oauth",
+          "isRequired": true,
+          "isSecret": false
+        },
+        {
+          "name": "MAXIMO_USERNAME",
+          "description": "Maximo username (when AUTH_MODE=basic)",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "MAXIMO_PASSWORD",
+          "description": "Maximo password (when AUTH_MODE=basic)",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "MAXIMO_API_KEY",
+          "description": "Maximo API key (when AUTH_MODE=apikey)",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "CURRENT_USER_ROLE",
+          "description": "RBAC role for the session: readonly | technician | supervisor | manager | admin",
+          "isRequired": false,
+          "isSecret": false
+        }
+      ]
+    }
+  ]
+}
