@@ -1,8 +1,10 @@
-# Maximo Enterprise MCP
+﻿# Maximo Enterprise MCP
 
 <!-- mcp-name: io.github.MaxisTechnology-Dev/maximo-mcp -->
 
-Production-focused IBM Maximo Asset Management integration for AI systems.
+A production-focused integration that brings IBM Maximo Asset Management into AI workflows through the Model Context Protocol.
+
+Built by [Maxis Technology](https://maxistechnology.com) as part of **Alchemize** — a state-of-the-art enterprise data management platform capable of doing in hours what others do in days. Want to know more? Head over to [alchemize.io](https://alchemize.io/).
 
 This project now exposes:
 
@@ -43,42 +45,108 @@ OpenAI / Gemini / Grok   -> FastAPI tool API -> shared executor -> Maximo OSLC
 
 ## Installation
 
-### Local MCP for Claude Desktop / Cursor
+### Local MCP for Claude Desktop / Claude Code / Cursor
 
-1. Create a virtual environment and install the package.
+You have two ways to install: `uvx` (recommended — no manual install) or `pip install`.
+
+#### Option A — `uvx` (recommended)
+
+Install [`uv`](https://docs.astral.sh/uv/getting-started/installation/) once, then point your MCP client at `uvx maximo-enterprise-mcp`. `uvx` downloads, caches, and runs the package on demand.
+
+#### Option B — `pip install`
 
 ```bash
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-pip install .
+pip install maximo-enterprise-mcp
 ```
 
-2. Copy [`.env.example`](.env.example) to `.env` and fill in your Maximo settings.
+Then in the configs below, replace:
 
-3. Use a local MCP config like [`.mcp.json.example`](.mcp.json.example) or [`.cursor/mcp.json.example`](.cursor/mcp.json.example).
+```json
+"command": "uvx",
+"args": ["maximo-enterprise-mcp"]
+```
 
-Example:
+with:
+
+```json
+"command": "maximo-enterprise-mcp",
+"args": []
+```
+
+#### Claude Desktop
+
+Edit `%APPDATA%\Claude\claude_desktop_config.json` (Windows) or `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS):
 
 ```json
 {
   "mcpServers": {
     "maximo": {
-      "command": "python",
-      "args": ["server.py"],
+      "command": "uvx",
+      "args": ["maximo-enterprise-mcp"],
       "env": {
-        "MAXIMO_URL": "https://your-maximo-host.example.com/maximo/oslc",
-        "MAXIMO_HOST": "https://your-maximo-host.example.com",
+        "MAXIMO_URL": "https://your-maximo-host.com/maximo/oslc",
+        "MAXIMO_HOST": "https://your-maximo-host.com",
         "AUTH_MODE": "basic",
-        "MAXIMO_USERNAME": "your-maximo-username",
-        "MAXIMO_PASSWORD": "your-maximo-password",
-        "CURRENT_USER_ROLE": "readonly",
-        "TRANSPORT_MODE": "stdio"
+        "MAXIMO_USERNAME": "your-username",
+        "MAXIMO_PASSWORD": "your-password",
+        "CURRENT_USER_ROLE": "readonly"
       }
     }
   }
 }
 ```
+
+Restart Claude Desktop. The hammer icon appears once tools load.
+
+#### Claude Code
+
+Add to project-level `.mcp.json` or global `~/.claude.json`:
+
+```json
+{
+  "mcpServers": {
+    "maximo": {
+      "command": "uvx",
+      "args": ["maximo-enterprise-mcp"],
+      "env": {
+        "MAXIMO_URL": "https://your-maximo-host.com/maximo/oslc",
+        "MAXIMO_HOST": "https://your-maximo-host.com",
+        "AUTH_MODE": "basic",
+        "MAXIMO_USERNAME": "your-username",
+        "MAXIMO_PASSWORD": "your-password",
+        "CURRENT_USER_ROLE": "readonly"
+      }
+    }
+  }
+}
+```
+
+Run `/mcp` in Claude Code to verify the connection.
+
+#### Cursor
+
+Add to `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (per project):
+
+```json
+{
+  "mcpServers": {
+    "maximo": {
+      "command": "uvx",
+      "args": ["maximo-enterprise-mcp"],
+      "env": {
+        "MAXIMO_URL": "https://your-maximo-host.com/maximo/oslc",
+        "MAXIMO_HOST": "https://your-maximo-host.com",
+        "AUTH_MODE": "basic",
+        "MAXIMO_USERNAME": "your-username",
+        "MAXIMO_PASSWORD": "your-password",
+        "CURRENT_USER_ROLE": "readonly"
+      }
+    }
+  }
+}
+```
+
+In Cursor: Settings → MCP → Refresh to load.
 
 ### Hosted MCP over HTTP/SSE
 
@@ -271,3 +339,7 @@ python server.py --test
 - Use example configs from the `*.example` files and keep secrets in local-only files or a secret manager.
 - Hosted mode requires `MCP_ACCESS_TOKEN`.
 - The env-based role model is suitable for local or trusted deployments, not multi-tenant public hosting.
+
+---
+
+*IBM and Maximo are trademarks of International Business Machines Corp., used here for descriptive purposes only. This project is not affiliated with IBM.*
