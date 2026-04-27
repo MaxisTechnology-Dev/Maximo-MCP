@@ -2,18 +2,18 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.MaxisTechnology-Dev/maximo-mcp",
   "title": "Maximo Enterprise MCP",
-  "description": "IBM Maximo MCP server: assets, work orders, inventory, purchasing, labor, OSLC tools.",
+  "description": "MCP server for IBM Maximo, by Maxis Technology — assets, work orders, inventory, purchasing, labor.",
   "repository": {
     "url": "https://github.com/MaxisTechnology-Dev/Maximo-MCP",
     "source": "github"
   },
-  "version": "0.1.1",
+  "version": "0.1.2",
   "packages": [
     {
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "maximo-enterprise-mcp",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"
