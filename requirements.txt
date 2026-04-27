@@ -1,27 +1,27 @@
 # ── Core MCP framework ────────────────────────────────────────────────────────
-fastmcp>=2.0.0
-fastapi>=0.135.0
-starlette>=0.49.1,<2.0.0
+fastmcp>=3.2.4
+fastapi>=0.136.1
+starlette>=1.0.0,<2.0.0
 
 # ── HTTP client ───────────────────────────────────────────────────────────────
-httpx>=0.27.0
+httpx>=0.28.1
 
 # ── Settings / config ─────────────────────────────────────────────────────────
-pydantic>=2.0.0
-pydantic-settings>=2.0.0
+pydantic>=2.13.3
+pydantic-settings>=2.14.0
 
 # ── Caching ───────────────────────────────────────────────────────────────────
-redis>=5.0.0
+redis>=7.4.0
 
 # ── YAML (for RBAC policies) ──────────────────────────────────────────────────
-PyYAML>=6.0
+PyYAML>=6.0.3
 
 # ── Inbound JWT validation (MCP_AUTH_MODE = jwt | both) ───────────────────────
-pyjwt[crypto]>=2.8.0
+pyjwt[crypto]>=2.12.1
 
 # ── Standard library extras ───────────────────────────────────────────────────
-python-dateutil>=2.9.0
-uvicorn>=0.30.0
+python-dateutil>=2.9.0.post0
+uvicorn>=0.46.0
 
 # Optional extras now live in pyproject.toml:
 #   pip install ".[ai]"      # OpenAI, ChromaDB, sentence-transformers
