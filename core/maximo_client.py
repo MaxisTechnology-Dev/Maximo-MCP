@@ -9,8 +9,7 @@ import base64
 import logging
 import random
 import time
-from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlencode, urljoin
+from typing import Any, Dict, Optional
 
 import httpx
 

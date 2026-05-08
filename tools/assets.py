@@ -23,6 +23,9 @@ from core.settings import get_settings
 
 # Kept for write operations and single-record lookups.
 ASSET_OS = "/os/mxasset"
+# Reliability OS endpoints — MAS 9.x naming. Legacy fallbacks tried first.
+FAILURELIST_OS_CANDIDATES = ("/os/mxfailure", "/os/mxapifailurelist")
+ASSETMETER_OS_CANDIDATES = ("/os/mxassetmeter", "/os/mxapiassetmeter")
 DEFAULT_ASSET_FIELDS = (
     "assetnum,description,siteid,status,assettype,serialnum,location,"
     "purchaseprice,installdate,changedate,manufacturer,vendor,parent"
@@ -538,6 +541,370 @@ async def search_assets(
         return _envelope(
             {"assets": members, "totalCount": result.get("totalCount", len(members)), "keyword": keyword},
             duration_ms=duration_ms, record_count=len(members)
+        )
+    except (MaximoAPIError, MaximoAuthError) as exc:
+        return _error(str(exc))
+    except Exception as exc:
+        return _error(f"Unexpected error [{type(exc).__name__}]: {exc!r}", "INTERNAL_ERROR")
+
+
+async def _try_candidates(client, candidates, params):
+    """Try each OSLC endpoint candidate; return (result, used_endpoint) on first success."""
+    last_exc: Optional[Exception] = None
+    for endpoint in candidates:
+        try:
+            return await client.get(endpoint, params=params), endpoint
+        except (MaximoAPIError, MaximoAuthError) as exc:
+            msg = str(exc)
+            if "404" in msg or "not found" in msg.lower():
+                last_exc = exc
+                continue
+            raise
+    raise last_exc if last_exc else MaximoAPIError("No candidate endpoint available")
+
+
+@require_role("readonly")
+async def get_failure_class_hierarchy(
+    parent: Optional[str] = None,
+    page_size: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    List Maximo failure classes (problem/cause/remedy taxonomy).
+    Pass `parent` to drill into one branch; omit it for top-level classes.
+
+    Args:
+        parent:    Failure class code to expand. None returns root nodes.
+        page_size: Max records per call (default 200, max 200)
+    """
+    page_size = max(1, min(int(page_size or 200), 200))
+    start = time.monotonic()
+
+    try:
+        client = await get_connected_client()
+        if parent:
+            where = f'parent="{oslc_escape(parent)}"'
+        else:
+            where = None
+        params = client.build_oslc_query(
+            where=where,
+            select="failurelist,description,parent,type",
+            order_by="+failurelist",
+            page_size=page_size,
+        )
+        try:
+            result, used = await _try_candidates(client, FAILURELIST_OS_CANDIDATES, params)
+        except (MaximoAPIError, MaximoAuthError) as exc:
+            msg = str(exc)
+            if "404" in msg or "not found" in msg.lower():
+                tried = ", ".join(FAILURELIST_OS_CANDIDATES)
+                return _error(
+                    f"Failure class object structure not published in this Maximo instance (tried: {tried}).",
+                    "NOT_FOUND",
+                )
+            raise
+
+        members: List[Dict] = result.get("member", [])
+        if parent is None:
+            # parent may be int, string, or missing — coerce before strip().
+            members = [m for m in members if not str(m.get("parent") or "").strip()]
+
+        duration_ms = int((time.monotonic() - start) * 1000)
+        return _envelope(
+            {"parent": parent, "endpoint": used, "classes": members},
+            duration_ms=duration_ms, record_count=len(members),
+        )
+    except (MaximoAPIError, MaximoAuthError) as exc:
+        return _error(str(exc))
+    except Exception as exc:
+        return _error(f"Unexpected error [{type(exc).__name__}]: {exc!r}", "INTERNAL_ERROR")
+
+
+@require_role("readonly")
+async def get_meter_readings(
+    asset_num: str,
+    site_id: str,
+    period_days: int = 90,
+    page_size: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Return meter readings recorded against an asset within the look-back
+    window. Useful for condition-based maintenance, runtime tracking, and
+    trend visualisation.
+
+    Args:
+        asset_num:   Asset number to fetch readings for
+        site_id:     Site ID (Python post-filter)
+        period_days: Look-back window in days (default 90)
+        page_size:   Max records per call (default 200, max 200)
+    """
+    if not asset_num or not site_id:
+        return _error("asset_num and site_id are required", "VALIDATION_ERROR")
+    page_size = max(1, min(int(page_size or 200), 200))
+
+    start = time.monotonic()
+    cutoff = (datetime.now() - timedelta(days=period_days)).strftime("%Y-%m-%dT00:00:00+00:00")
+
+    try:
+        client = await get_connected_client()
+        # No order_by — `readingdate` is not orderable on some Maximo resource definitions
+        # (BMXAA9105E). We sort by readingdate in Python after fetch.
+        params = client.build_oslc_query(
+            where=f'assetnum="{oslc_escape(asset_num)}"',
+            select="assetnum,siteid,metername,reading,readingdate,readingtype,inspector",
+            page_size=page_size,
+        )
+        try:
+            result, used = await _try_candidates(client, ASSETMETER_OS_CANDIDATES, params)
+        except (MaximoAPIError, MaximoAuthError) as exc:
+            msg = str(exc)
+            if "404" in msg or "not found" in msg.lower():
+                tried = ", ".join(ASSETMETER_OS_CANDIDATES)
+                return _error(
+                    f"Asset meter object structure not published in this Maximo instance (tried: {tried}).",
+                    "NOT_FOUND",
+                )
+            raise
+
+        members: List[Dict] = result.get("member", [])
+        site_u = site_id.upper()
+        readings = [
+            r for r in members
+            if (r.get("siteid") or "").upper() == site_u
+            and (r.get("readingdate") or "") >= cutoff
+        ]
+        # Sort newest-first in Python (server-side orderBy not supported on this resource).
+        readings.sort(key=lambda r: r.get("readingdate") or "", reverse=True)
+
+        by_meter: Dict[str, List[Dict[str, Any]]] = {}
+        for r in readings:
+            m = r.get("metername") or "(unknown)"
+            by_meter.setdefault(m, []).append(r)
+
+        meters_summary = []
+        for name, rs in sorted(by_meter.items()):
+            try:
+                latest_val = float(rs[0].get("reading") or 0)
+                oldest_val = float(rs[-1].get("reading") or 0)
+                delta = round(latest_val - oldest_val, 3)
+            except Exception:
+                latest_val = oldest_val = delta = None
+            meters_summary.append(
+                {
+                    "metername": name,
+                    "reading_count": len(rs),
+                    "latest_reading": latest_val,
+                    "latest_reading_date": rs[0].get("readingdate"),
+                    "oldest_reading_in_window": oldest_val,
+                    "delta_in_window": delta,
+                }
+            )
+
+        duration_ms = int((time.monotonic() - start) * 1000)
+        return _envelope(
+            {
+                "asset_num": asset_num,
+                "site_id": site_id,
+                "period_days": period_days,
+                "endpoint": used,
+                "meters_summary": meters_summary,
+                "readings": readings,
+            },
+            duration_ms=duration_ms, record_count=len(readings),
+        )
+    except (MaximoAPIError, MaximoAuthError) as exc:
+        return _error(str(exc))
+    except Exception as exc:
+        return _error(f"Unexpected error [{type(exc).__name__}]: {exc!r}", "INTERNAL_ERROR")
+
+
+@require_role("readonly")
+async def get_asset_criticality_matrix(
+    site_id: str,
+    top_n: int = 20,
+) -> Dict[str, Any]:
+    """
+    Build an asset criticality matrix from the `priority` field on each
+    asset record (1=highest, 5=lowest by Maximo convention). Returns a
+    bucket count by priority and a list of the highest-criticality assets.
+
+    Args:
+        site_id: Site to analyse
+        top_n:   Number of top-priority assets to surface (default 20)
+    """
+    if not site_id:
+        return _error("site_id is required", "VALIDATION_ERROR")
+
+    start = time.monotonic()
+    try:
+        client = await get_connected_client()
+        # No order_by — on some Maximo builds, sorting by a sparse-NULL field like
+        # `priority` causes the column to be stripped from the response entirely.
+        # We sort in Python after fetch.
+        params = client.build_oslc_query(
+            where=f'siteid="{oslc_escape(site_id)}"',
+            select="assetnum,description,siteid,status,priority,assettype,location",
+            page_size=200,
+        )
+        data = await client.get(ASSET_OS, params=params)
+        members: List[Dict] = data.get("member", [])
+
+        site_u = site_id.upper()
+        in_scope = [a for a in members if (a.get("siteid") or "").upper() == site_u]
+
+        buckets: Dict[str, int] = {}
+        for a in in_scope:
+            p = a.get("priority")
+            key = str(int(p)) if isinstance(p, (int, float)) and p is not None else "UNSET"
+            buckets[key] = buckets.get(key, 0) + 1
+
+        def _sort_key(a: Dict) -> float:
+            p = a.get("priority")
+            if isinstance(p, (int, float)) and p > 0:
+                return float(p)
+            return 999.0
+
+        top = sorted(in_scope, key=_sort_key)[:top_n]
+        top_assets = [
+            {
+                "assetnum": a.get("assetnum"),
+                "description": a.get("description"),
+                "priority": a.get("priority"),
+                "status": a.get("status"),
+                "assettype": a.get("assettype"),
+                "location": a.get("location"),
+            }
+            for a in top
+        ]
+
+        duration_ms = int((time.monotonic() - start) * 1000)
+        return _envelope(
+            {
+                "site_id": site_id,
+                "total_assets": len(in_scope),
+                "priority_buckets": dict(sorted(buckets.items())),
+                "top_priority_assets": top_assets,
+            },
+            duration_ms=duration_ms, record_count=len(in_scope),
+        )
+    except (MaximoAPIError, MaximoAuthError) as exc:
+        return _error(str(exc))
+    except Exception as exc:
+        return _error(f"Unexpected error [{type(exc).__name__}]: {exc!r}", "INTERNAL_ERROR")
+
+
+@require_role("readonly")
+async def get_warranty_status(
+    site_id: str,
+    asset_num: Optional[str] = None,
+    expiring_within_days: int = 90,
+) -> Dict[str, Any]:
+    """
+    Report warranty status for assets at a site. Each asset is bucketed
+    into one of: ACTIVE, EXPIRING_SOON, EXPIRED, or UNKNOWN (no warranty
+    date populated). Useful for capturing claim-recovery opportunities
+    before a covered failure becomes self-funded.
+
+    Args:
+        site_id:              Site to analyse
+        asset_num:            Optional single-asset filter (Python post-filter)
+        expiring_within_days: Window for the EXPIRING_SOON bucket (default 90)
+    """
+    if not site_id:
+        return _error("site_id is required", "VALIDATION_ERROR")
+
+    start = time.monotonic()
+
+    try:
+        client = await get_connected_client()
+        # Single-condition WHERE on siteid; asset_num post-filtered. Some Maximo
+        # builds don't expose `warrantyexpdate` — we still return the asset row
+        # with bucket=UNKNOWN so callers can spot data gaps.
+        params = client.build_oslc_query(
+            where=f'siteid="{oslc_escape(site_id)}"',
+            select="assetnum,description,siteid,status,assettype,installdate,warrantyexpdate,vendor,manufacturer,purchaseprice",
+            page_size=200,
+        )
+        data = await client.get(ASSET_OS, params=params)
+        site_u = site_id.upper()
+        scope = [a for a in data.get("member", []) if (a.get("siteid") or "").upper() == site_u]
+        if asset_num:
+            au = asset_num.upper()
+            scope = [a for a in scope if (a.get("assetnum") or "").upper() == au]
+
+        now = datetime.now()
+        expiring_cutoff = now + timedelta(days=expiring_within_days)
+        buckets: Dict[str, int] = {"ACTIVE": 0, "EXPIRING_SOON": 0, "EXPIRED": 0, "UNKNOWN": 0}
+        annotated: List[Dict[str, Any]] = []
+
+        def _parse(s: Any) -> Optional[datetime]:
+            if not s:
+                return None
+            try:
+                if isinstance(s, str):
+                    if s.endswith("Z"):
+                        s = s[:-1] + "+00:00"
+                    return datetime.fromisoformat(s).replace(tzinfo=None)
+            except ValueError:
+                return None
+            return None
+
+        for a in scope:
+            warranty_dt = _parse(a.get("warrantyexpdate"))
+            install_dt = _parse(a.get("installdate"))
+            if warranty_dt is None:
+                bucket = "UNKNOWN"
+                days_until = None
+            elif warranty_dt < now:
+                bucket = "EXPIRED"
+                days_until = (warranty_dt - now).days
+            elif warranty_dt <= expiring_cutoff:
+                bucket = "EXPIRING_SOON"
+                days_until = (warranty_dt - now).days
+            else:
+                bucket = "ACTIVE"
+                days_until = (warranty_dt - now).days
+            buckets[bucket] += 1
+            annotated.append(
+                {
+                    "assetnum": a.get("assetnum"),
+                    "description": a.get("description"),
+                    "status": a.get("status"),
+                    "assettype": a.get("assettype"),
+                    "vendor": a.get("vendor"),
+                    "manufacturer": a.get("manufacturer"),
+                    "purchase_price": a.get("purchaseprice"),
+                    "install_date": install_dt.strftime("%Y-%m-%d") if install_dt else None,
+                    "warranty_expiry": warranty_dt.strftime("%Y-%m-%d") if warranty_dt else None,
+                    "days_until_expiry": days_until,
+                    "bucket": bucket,
+                }
+            )
+
+        # Sort: expiring soon first (most urgent), then expired, active, unknown
+        bucket_order = {"EXPIRING_SOON": 0, "EXPIRED": 1, "ACTIVE": 2, "UNKNOWN": 3}
+        annotated.sort(
+            key=lambda x: (
+                bucket_order.get(x["bucket"], 9),
+                x.get("days_until_expiry") if x.get("days_until_expiry") is not None else 999_999,
+            )
+        )
+
+        duration_ms = int((time.monotonic() - start) * 1000)
+        return _envelope(
+            {
+                "site_id": site_id,
+                "asset_num_filter": asset_num,
+                "expiring_within_days": expiring_within_days,
+                "total_assets": len(annotated),
+                "buckets": buckets,
+                "data_unavailable": (
+                    "warrantyexpdate field not populated on any asset — "
+                    "check that Maximo MXASSET.WARRANTYEXPDATE is published in the OSLC object structure."
+                    if buckets["UNKNOWN"] == len(annotated) and annotated else None
+                ),
+                "assets": annotated,
+            },
+            duration_ms=duration_ms, record_count=len(annotated),
         )
     except (MaximoAPIError, MaximoAuthError) as exc:
         return _error(str(exc))

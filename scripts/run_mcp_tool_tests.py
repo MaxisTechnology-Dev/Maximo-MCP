@@ -31,8 +31,8 @@ import json
 import os
 import sys
 import time
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
@@ -1173,16 +1173,16 @@ async def main() -> int:
     if timings:
         sorted_timings = sorted(timings.items(), key=lambda x: x[1], reverse=True)
         avg = sum(timings.values()) / len(timings)
-        print(f"\n=== PERFORMANCE ===\n")
+        print("\n=== PERFORMANCE ===\n")
         print(f"Average response time: {avg:.2f}s")
         print("Slowest 5 tools:")
         for name, t in sorted_timings[:5]:
             print(f"  {t:.1f}s  {name}")
 
-    print(f"\nNOTE: receive_items (slot 58) requires create_purchase_order to succeed first.")
-    print(f"      update_pm_frequency + generate_pm_workorders + list_pm_schedules + get_pm_forecast")
-    print(f"      may fail with BMXAA0024E if the PM object requires additional Maximo permissions.")
-    print(f"      list_security_groups may return 404 if /os/mxsecgroup is not configured.")
+    print("\nNOTE: receive_items (slot 58) requires create_purchase_order to succeed first.")
+    print("      update_pm_frequency + generate_pm_workorders + list_pm_schedules + get_pm_forecast")
+    print("      may fail with BMXAA0024E if the PM object requires additional Maximo permissions.")
+    print("      list_security_groups may return 404 if /os/mxsecgroup is not configured.")
 
     return 0
 

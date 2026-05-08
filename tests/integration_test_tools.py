@@ -23,7 +23,6 @@ import time
 from typing import Any, Dict, List
 
 import sys
-import os
 
 # ── Add project root to sys.path (needed when running via `pytest` not `python -m pytest`) ──
 _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

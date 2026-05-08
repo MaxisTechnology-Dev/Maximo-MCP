@@ -15,6 +15,8 @@ from core.rbac import require_role
 LABOR_OS = "/os/mxlabor"
 PERSON_OS = "/os/mxperson"
 CREW_OS = "/os/mxcrew"
+CRAFT_OS_CANDIDATES = ("/os/mxcraft", "/os/mxapicraft")
+ASSIGNMENT_OS_CANDIDATES = ("/os/mxassignment", "/os/mxapiassignment")
 
 
 def _envelope(data: Any, cached: bool = False, duration_ms: int = 0, record_count: Optional[int] = None) -> Dict:
@@ -217,6 +219,178 @@ async def list_crews(site_id: str) -> Dict[str, Any]:
                 duration_ms=duration_ms,
                 record_count=0,
             )
+        return _error(str(exc))
+    except Exception as exc:
+        return _error(f"Unexpected error [{type(exc).__name__}]: {exc!r}", "INTERNAL_ERROR")
+
+
+async def _try_candidates(client, candidates, params):
+    last_exc: Optional[Exception] = None
+    for endpoint in candidates:
+        try:
+            return await client.get(endpoint, params=params), endpoint
+        except (MaximoAPIError, MaximoAuthError) as exc:
+            msg = str(exc)
+            if "404" in msg or "not found" in msg.lower():
+                last_exc = exc
+                continue
+            raise
+    raise last_exc if last_exc else MaximoAPIError("No candidate endpoint available")
+
+
+@require_role("readonly")
+async def list_crafts(
+    page_size: Optional[int] = None,
+    page_num: int = 1,
+) -> Dict[str, Any]:
+    """
+    List craft records (skill / trade reference data). Inputs for
+    `find_available_technician` and `list_labor` come from this catalog.
+
+    Args:
+        page_size: Records per page (default 50, max 200)
+        page_num:  1-based page number
+    """
+    page_size = max(1, min(int(page_size or 50), 200))
+    start = time.monotonic()
+
+    try:
+        client = await get_connected_client()
+        params = client.build_oslc_query(
+            select="craft,description,orgid,outsidecraft",
+            order_by="+craft",
+            page_size=200,
+        )
+        try:
+            result, used = await _try_candidates(client, CRAFT_OS_CANDIDATES, params)
+        except (MaximoAPIError, MaximoAuthError) as exc:
+            msg = str(exc)
+            if "404" in msg or "not found" in msg.lower():
+                tried = ", ".join(CRAFT_OS_CANDIDATES)
+                return _error(
+                    f"Craft object structure not published in this Maximo instance (tried: {tried}).",
+                    "NOT_FOUND",
+                )
+            raise
+
+        members: List[Dict] = result.get("member", [])
+        start_idx = (page_num - 1) * page_size
+        page_rows = members[start_idx:start_idx + page_size]
+        duration_ms = int((time.monotonic() - start) * 1000)
+        return _envelope(
+            {"endpoint": used, "crafts": page_rows, "totalCount": len(members)},
+            duration_ms=duration_ms, record_count=len(page_rows),
+        )
+    except (MaximoAPIError, MaximoAuthError) as exc:
+        return _error(str(exc))
+    except Exception as exc:
+        return _error(f"Unexpected error [{type(exc).__name__}]: {exc!r}", "INTERNAL_ERROR")
+
+
+@require_role("readonly")
+async def find_available_technician(
+    site_id: str,
+    craft: Optional[str] = None,
+    page_size: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Return technicians at a site (optionally filtered by craft) ordered
+    by their current open-assignment count — least-busy first. The count
+    column is best-effort: it queries the assignment object structure and
+    falls back to 0 if assignments are not exposed.
+
+    Args:
+        site_id:   Site to filter on
+        craft:     Optional craft code filter
+        page_size: Records per page (default 50, max 200)
+    """
+    if not site_id:
+        return _error("site_id is required", "VALIDATION_ERROR")
+    page_size = max(1, min(int(page_size or 50), 200))
+
+    start = time.monotonic()
+
+    try:
+        client = await get_connected_client()
+        # Step 1 — fetch labor. Note: `siteid` is NOT queryable on mxlabor on
+        # some Maximo builds (BMXAA8781E "property siteid is not found"); labor
+        # records are org-scoped rather than site-scoped. So we filter by
+        # `status="ACTIVE"` (or `craft` when given) and let the assignment
+        # cross-reference do the site narrowing.
+        if craft:
+            where = f'craft="{oslc_escape(craft)}"'
+        else:
+            where = 'status="ACTIVE"'
+        labor_params = client.build_oslc_query(
+            where=where,
+            select="laborcode,personid,siteid,craft,status,statusdate",
+            page_size=200,
+        )
+        labor_data = await client.get(LABOR_OS, params=labor_params)
+        site_u = site_id.upper()
+        # Post-filter: keep only ACTIVE labor; if siteid is present on the
+        # record, narrow to the requested site (otherwise keep — many Maximo
+        # builds omit siteid from the labor response).
+        labor_rows = []
+        for r in labor_data.get("member", []):
+            if (r.get("status") or "").upper() != "ACTIVE":
+                continue
+            row_site = (r.get("siteid") or "").upper()
+            if row_site and row_site != site_u:
+                continue
+            if craft and (r.get("craft") or "").upper() != craft.upper():
+                continue
+            labor_rows.append(r)
+
+        # Step 2 — best-effort assignment lookup.
+        assignment_counts: Dict[str, int] = {}
+        try:
+            asg_params = client.build_oslc_query(
+                where=f'siteid="{oslc_escape(site_id)}"',
+                select="laborcode,siteid,status,wonum,scheddate",
+                page_size=200,
+            )
+            asg_result, _ = await _try_candidates(client, ASSIGNMENT_OS_CANDIDATES, asg_params)
+            terminal = {"COMP", "CLOSE", "CAN", "CANCELLED"}
+            for a in asg_result.get("member", []):
+                if (a.get("siteid") or "").upper() != site_u:
+                    continue
+                if (a.get("status") or "").upper() in terminal:
+                    continue
+                code = (a.get("laborcode") or "").upper()
+                if not code:
+                    continue
+                assignment_counts[code] = assignment_counts.get(code, 0) + 1
+        except (MaximoAPIError, MaximoAuthError):
+            assignment_counts = {}
+
+        ranked = []
+        for r in labor_rows:
+            code = (r.get("laborcode") or "").upper()
+            ranked.append(
+                {
+                    "laborcode": r.get("laborcode"),
+                    "personid": r.get("personid"),
+                    "craft": r.get("craft"),
+                    "status": r.get("status"),
+                    "open_assignments": assignment_counts.get(code, 0),
+                }
+            )
+        ranked.sort(key=lambda r: (r["open_assignments"], r.get("laborcode") or ""))
+
+        page_rows = ranked[:page_size]
+        duration_ms = int((time.monotonic() - start) * 1000)
+        return _envelope(
+            {
+                "site_id": site_id,
+                "craft_filter": craft,
+                "total_active_labor": len(ranked),
+                "assignment_counts_available": bool(assignment_counts),
+                "technicians": page_rows,
+            },
+            duration_ms=duration_ms, record_count=len(page_rows),
+        )
+    except (MaximoAPIError, MaximoAuthError) as exc:
         return _error(str(exc))
     except Exception as exc:
         return _error(f"Unexpected error [{type(exc).__name__}]: {exc!r}", "INTERNAL_ERROR")

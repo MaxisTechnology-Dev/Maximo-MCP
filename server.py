@@ -37,6 +37,7 @@ import tools.reporting as reporting
 import tools.admin as admin
 import tools.schema_dev as schema_dev
 import tools.integrations as integrations
+import tools.compliance as compliance
 
 # ── Logging setup ─────────────────────────────────────────────────────────────
 settings = get_settings()
@@ -196,10 +197,41 @@ async def get_asset_downtime_stats(
 @mcp.tool()
 async def search_assets(
     keyword: str, site_id: Optional[str] = None,
-    filters: Optional[Dict[str, str]] = None, page_size: Optional[int] = None
+    filters: Optional[Dict[str, str]] = None,
+    page_size: Optional[int] = None, page_num: int = 1,
 ) -> Dict[str, Any]:
     """Search assets by keyword across description and serial number."""
-    return await assets.search_assets(keyword, site_id, filters, page_size)
+    return await assets.search_assets(keyword, site_id, filters, page_size, page_num)
+
+
+@mcp.tool()
+async def get_failure_class_hierarchy(
+    parent: Optional[str] = None, page_size: Optional[int] = None,
+) -> Dict[str, Any]:
+    """List Maximo failure classes (problem/cause/remedy taxonomy). Pass parent to drill in."""
+    return await assets.get_failure_class_hierarchy(parent, page_size)
+
+
+@mcp.tool()
+async def get_meter_readings(
+    asset_num: str, site_id: str, period_days: int = 90, page_size: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Return meter readings for an asset over a look-back window with per-meter trend deltas."""
+    return await assets.get_meter_readings(asset_num, site_id, period_days, page_size)
+
+
+@mcp.tool()
+async def get_asset_criticality_matrix(site_id: str, top_n: int = 20) -> Dict[str, Any]:
+    """Build a priority/criticality matrix for a site — bucket counts plus top-N highest-priority assets."""
+    return await assets.get_asset_criticality_matrix(site_id, top_n)
+
+
+@mcp.tool()
+async def get_warranty_status(
+    site_id: str, asset_num: Optional[str] = None, expiring_within_days: int = 90,
+) -> Dict[str, Any]:
+    """Bucket assets by warranty status (ACTIVE / EXPIRING_SOON / EXPIRED / UNKNOWN) for claim recovery."""
+    return await assets.get_warranty_status(site_id, asset_num, expiring_within_days)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -284,6 +316,78 @@ async def get_workorder_kpis(site_id: str, period_months: int = 3) -> Dict[str, 
     return await workorders.get_workorder_kpis(site_id, period_months)
 
 
+@mcp.tool()
+async def list_service_requests(
+    site_id: Optional[str] = None, status: Optional[str] = None, reported_by: Optional[str] = None,
+    page_size: Optional[int] = None, page_num: int = 1,
+) -> Dict[str, Any]:
+    """List service requests (SRs) — upstream intake records that convert to work orders."""
+    return await workorders.list_service_requests(site_id, status, reported_by, page_size, page_num)
+
+
+@mcp.tool()
+async def get_service_request(ticket_id: str, site_id: str) -> Dict[str, Any]:
+    """Get full details of a specific service request including work log."""
+    return await workorders.get_service_request(ticket_id, site_id)
+
+
+@mcp.tool()
+async def list_job_plans(
+    site_id: Optional[str] = None, keyword: Optional[str] = None, active_only: bool = True,
+    page_size: Optional[int] = None, page_num: int = 1,
+) -> Dict[str, Any]:
+    """List job plans — reusable work templates planners attach to work orders and PMs."""
+    return await workorders.list_job_plans(site_id, keyword, active_only, page_size, page_num)
+
+
+@mcp.tool()
+async def get_my_assigned_workorders(
+    labor_code: Optional[str] = None, site_id: Optional[str] = None, open_only: bool = True,
+    page_size: Optional[int] = None, page_num: int = 1,
+) -> Dict[str, Any]:
+    """List work orders assigned to a labor (technician). Defaults labor_code to the current identity."""
+    return await workorders.get_my_assigned_workorders(labor_code, site_id, open_only, page_size, page_num)
+
+
+@mcp.tool()
+async def get_workorder_tasks(wonum: str, site_id: str) -> Dict[str, Any]:
+    """List the task breakdown for a parent work order (child WOs whose parent=wonum)."""
+    return await workorders.get_workorder_tasks(wonum, site_id)
+
+
+@mcp.tool()
+async def get_job_plan(jpnum: str, site_id: Optional[str] = None) -> Dict[str, Any]:
+    """Get full job plan details with embedded tasks, planned labor, materials, and tools."""
+    return await workorders.get_job_plan(jpnum, site_id)
+
+
+@mcp.tool()
+async def get_workorder_actuals_vs_planned(wonum: str, site_id: str) -> Dict[str, Any]:
+    """Compare estimated vs actual labor hours and cost for a work order — variance analysis."""
+    return await workorders.get_workorder_actuals_vs_planned(wonum, site_id)
+
+
+@mcp.tool()
+async def get_workorder_costs(wonum: str, site_id: str) -> Dict[str, Any]:
+    """Return labor + material + service + tool actual cost breakdown for a work order."""
+    return await workorders.get_workorder_costs(wonum, site_id)
+
+
+@mcp.tool()
+async def get_schedule_calendar(
+    site_id: str, date_from: Optional[str] = None, date_to: Optional[str] = None,
+    group_by: str = "date", page_size: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Return scheduled work orders within a date window grouped by date or as a flat list."""
+    return await workorders.get_schedule_calendar(site_id, date_from, date_to, group_by, page_size)
+
+
+@mcp.tool()
+async def estimate_workorder_cost(jpnum: str, site_id: Optional[str] = None) -> Dict[str, Any]:
+    """Estimate labor + material + tool cost of executing a job plan from its child collections."""
+    return await workorders.estimate_workorder_cost(jpnum, site_id)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # PM SCHEDULING TOOLS
 # ══════════════════════════════════════════════════════════════════════════════
@@ -363,6 +467,41 @@ async def get_reorder_recommendations(site_id: str) -> Dict[str, Any]:
     return await inventory.get_reorder_recommendations(site_id)
 
 
+@mcp.tool()
+async def list_items(
+    keyword: Optional[str] = None, item_type: Optional[str] = None, commodity_group: Optional[str] = None,
+    page_size: Optional[int] = None, page_num: int = 1,
+) -> Dict[str, Any]:
+    """List item-master records — the catalog of stocked and non-stocked items."""
+    return await inventory.list_items(keyword, item_type, commodity_group, page_size, page_num)
+
+
+@mcp.tool()
+async def get_item(item_num: str) -> Dict[str, Any]:
+    """Get full item-master details for a specific item number."""
+    return await inventory.get_item(item_num)
+
+
+@mcp.tool()
+async def list_storerooms(site_id: str, active_only: bool = True) -> Dict[str, Any]:
+    """List storeroom locations for a site — the input vocabulary for stock and material tools."""
+    return await inventory.list_storerooms(site_id, active_only)
+
+
+@mcp.tool()
+async def get_inventory_valuation(
+    site_id: str, storeroom: Optional[str] = None, top_n: int = 20,
+) -> Dict[str, Any]:
+    """Total inventory valuation (curbal × avgcost) plus top-N items by line value."""
+    return await inventory.get_inventory_valuation(site_id, storeroom, top_n)
+
+
+@mcp.tool()
+async def get_critical_spares_check(site_id: str, priority_threshold: int = 2) -> Dict[str, Any]:
+    """For each critical asset (priority ≤ threshold), report spare-parts stockout risk."""
+    return await inventory.get_critical_spares_check(site_id, priority_threshold)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # PURCHASING TOOLS
 # ══════════════════════════════════════════════════════════════════════════════
@@ -384,6 +523,42 @@ async def create_purchase_order(
 async def get_purchase_order(ponum: str, site_id: str) -> Dict[str, Any]:
     """Get full purchase order details including all line items."""
     return await purchasing.get_purchase_order(ponum, site_id)
+
+
+@mcp.tool()
+async def list_purchase_orders(
+    site_id: Optional[str] = None, status: Optional[str] = None, vendor: Optional[str] = None,
+    date_from: Optional[str] = None, date_to: Optional[str] = None,
+    page_size: Optional[int] = None, page_num: int = 1,
+) -> Dict[str, Any]:
+    """List purchase orders with filters for site, status, vendor, and order date range."""
+    return await purchasing.list_purchase_orders(site_id, status, vendor, date_from, date_to, page_size, page_num)
+
+
+@mcp.tool()
+async def list_vendors(
+    name_filter: Optional[str] = None, active_only: bool = True,
+    page_size: Optional[int] = None, page_num: int = 1,
+) -> Dict[str, Any]:
+    """List vendor (company) records. Used to discover vendor codes for PO and performance lookups."""
+    return await purchasing.list_vendors(name_filter, active_only, page_size, page_num)
+
+
+@mcp.tool()
+async def list_purchase_requisitions(
+    site_id: Optional[str] = None, status: Optional[str] = None, vendor: Optional[str] = None,
+    page_size: Optional[int] = None, page_num: int = 1,
+) -> Dict[str, Any]:
+    """List purchase requisitions — the upstream PR records that convert to POs."""
+    return await purchasing.list_purchase_requisitions(site_id, status, vendor, page_size, page_num)
+
+
+@mcp.tool()
+async def get_spend_analysis(
+    site_id: str, period_months: int = 12, group_by: str = "vendor", top_n: int = 10,
+) -> Dict[str, Any]:
+    """Aggregate purchasing spend grouped by vendor / status / worktype with concentration metrics."""
+    return await purchasing.get_spend_analysis(site_id, period_months, group_by, top_n)
 
 
 # DISABLED — write operation
@@ -414,26 +589,23 @@ async def nl_to_oslc_query(
     return await ai.nl_to_oslc_query(natural_language_query, object_structure, dry_run)
 
 
-# DISABLED — AI tool (SKIPPED_COMPLEX)
-# @mcp.tool()
+@mcp.tool()
 async def detect_asset_anomalies(
     asset_num: str, site_id: str, lookback_days: int = 90
 ) -> Dict[str, Any]:
-    """Detect statistical anomalies in asset failure patterns. Flags >2σ deviations."""
+    """Detect statistical anomalies in asset failure patterns. Flags >2σ deviations from baseline."""
     return await ai.detect_asset_anomalies(asset_num, site_id, lookback_days)
 
 
-# DISABLED — AI tool (SKIPPED_COMPLEX)
-# @mcp.tool()
+@mcp.tool()
 async def suggest_root_cause(
     asset_num: str, site_id: str, failure_description: str
 ) -> Dict[str, Any]:
-    """AI-powered root cause analysis using failure history. Returns top 3 causes with confidence scores."""
+    """Root cause analysis from failure history (LLM-enhanced when OPENAI_API_KEY set, rule-based otherwise)."""
     return await ai.suggest_root_cause(asset_num, site_id, failure_description)
 
 
-# DISABLED — AI tool (SKIPPED_COMPLEX)
-# @mcp.tool()
+@mcp.tool()
 async def summarize_asset_health(asset_num: str, site_id: str) -> Dict[str, Any]:
     """Generate asset health score (0-100) with status, key issues, and recommendations."""
     return await ai.summarize_asset_health(asset_num, site_id)
@@ -456,21 +628,36 @@ async def get_maintenance_kpi_dashboard(site_id: str, period_months: int = 3) ->
     return await reporting.get_maintenance_kpi_dashboard(site_id, period_months)
 
 
-# DISABLED — export tool (SKIPPED_COMPLEX)
-# @mcp.tool()
+@mcp.tool()
+async def get_failure_pareto(
+    site_id: str, asset_num: Optional[str] = None,
+    period_months: int = 12, top_n: int = 10,
+) -> Dict[str, Any]:
+    """Pareto chart of failure codes — top-N failure modes by frequency with cumulative %."""
+    return await reporting.get_failure_pareto(site_id, asset_num, period_months, top_n)
+
+
+@mcp.tool()
+async def get_bad_actor_assets(
+    site_id: str, period_months: int = 12, top_n: int = 10,
+) -> Dict[str, Any]:
+    """Top-N bad actor assets ranked by corrective WO count, labor hours, and cost."""
+    return await reporting.get_bad_actor_assets(site_id, period_months, top_n)
+
+
+@mcp.tool()
 async def export_workorders_excel(
     site_id: str, filters: Optional[Dict[str, str]] = None, max_records: int = 1000
 ) -> Dict[str, Any]:
-    """Export work orders to Excel. Returns base64-encoded file + filename."""
+    """Export work orders to an Excel workbook (.xlsx). Returns base64-encoded file + filename."""
     return await reporting.export_workorders_excel(site_id, filters, max_records)
 
 
-# DISABLED — export tool (SKIPPED_COMPLEX)
-# @mcp.tool()
+@mcp.tool()
 async def export_asset_report_pdf(
     site_id: str, asset_group: Optional[str] = None, max_records: int = 200
 ) -> Dict[str, Any]:
-    """Export asset report to PDF. Returns base64-encoded file + filename."""
+    """Export an asset report to PDF (A4, branded header). Returns base64-encoded file + filename."""
     return await reporting.export_asset_report_pdf(site_id, asset_group, max_records)
 
 
@@ -624,6 +811,20 @@ async def list_crews(site_id: str) -> Dict[str, Any]:
 
 
 @mcp.tool()
+async def list_crafts(page_size: Optional[int] = None, page_num: int = 1) -> Dict[str, Any]:
+    """List craft / trade master records — input vocabulary for labor and assignment tools."""
+    return await labor.list_crafts(page_size, page_num)
+
+
+@mcp.tool()
+async def find_available_technician(
+    site_id: str, craft: Optional[str] = None, page_size: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Return active technicians at a site, optionally craft-filtered, ordered by current open-assignment count (least busy first)."""
+    return await labor.find_available_technician(site_id, craft, page_size)
+
+
+@mcp.tool()
 async def list_locations(
     site_id: str, parent_location: Optional[str] = None, location_type: Optional[str] = None
 ) -> Dict[str, Any]:
@@ -644,6 +845,54 @@ async def get_location_hierarchy(site_id: str, root_location: Optional[str] = No
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# COMPLIANCE / EHS TOOLS
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+async def list_calibration_due(site_id: str, days_ahead: int = 30) -> Dict[str, Any]:
+    """List calibration PMs due within a look-ahead window (default 30 days). Worktype CAL or description prefix CAL."""
+    return await compliance.list_calibration_due(site_id, days_ahead)
+
+
+@mcp.tool()
+async def list_inspections_due(site_id: str, days_ahead: int = 30) -> Dict[str, Any]:
+    """List open INSP-type work orders whose target start date falls within the look-ahead window."""
+    return await compliance.list_inspections_due(site_id, days_ahead)
+
+
+@mcp.tool()
+async def list_permits_to_work(
+    site_id: Optional[str] = None, status: Optional[str] = None,
+    page_size: Optional[int] = None, page_num: int = 1,
+) -> Dict[str, Any]:
+    """List Permit to Work records (HSE add-on). Returns data_unavailable=True when the OSLC OS isn't published."""
+    return await compliance.list_permits_to_work(site_id, status, page_size, page_num)
+
+
+@mcp.tool()
+async def list_certifications_expiring(
+    site_id: Optional[str] = None, days_ahead: int = 90,
+) -> Dict[str, Any]:
+    """List labor qualifications expiring within the look-ahead window, bucketed EXPIRED / EXPIRING_SOON / ACTIVE."""
+    return await compliance.list_certifications_expiring(site_id, days_ahead)
+
+
+@mcp.tool()
+async def list_incidents(
+    site_id: Optional[str] = None, status: Optional[str] = None, severity: Optional[str] = None,
+    page_size: Optional[int] = None, page_num: int = 1,
+) -> Dict[str, Any]:
+    """List safety/HSE incidents. Tries MXINCIDENT first, falls back to SR records with safety classification."""
+    return await compliance.list_incidents(site_id, status, severity, page_size, page_num)
+
+
+@mcp.tool()
+async def get_compliance_dashboard(site_id: str, days_ahead: int = 30) -> Dict[str, Any]:
+    """Site-wide compliance dashboard: calibrations + inspections + permits + certifications + incidents. Manager role required."""
+    return await compliance.get_compliance_dashboard(site_id, days_ahead)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # ENTRY POINT
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -651,7 +900,7 @@ def _list_tools():
     """Print all registered tools and exit."""
     tools_list = asyncio.run(mcp.list_tools())
     print(f"\n{'='*60}")
-    print(f"  Maximo Enterprise MCP - Registered Tools")
+    print("  Maximo Enterprise MCP - Registered Tools")
     print(f"{'='*60}")
     for i, tool in enumerate(sorted(tools_list, key=lambda t: t.name), 1):
         print(f"  {i:2d}. {tool.name}")

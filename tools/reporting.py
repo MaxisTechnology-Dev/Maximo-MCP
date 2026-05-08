@@ -172,23 +172,41 @@ async def export_workorders_excel(
     try:
         client = await get_connected_client()
         from core.oslc_utils import safe_field_name  # already imported above; guard for clarity
-        where_parts = [f'siteid="{oslc_escape(site_id)}"']
+
+        # Single-condition WHERE on siteid; additional filters applied in Python
+        # (compound WHERE with multiple equality clauses can drop the connection
+        # on some Maximo builds — same constraint that drove Wave-2 refactors).
+        params = client.build_oslc_query(
+            where=f'siteid="{oslc_escape(site_id)}"',
+            select="wonum,description,status,priority,assetnum,worktype,reportdate,actfinish,actlabhrs,actlabcost,siteid",
+            order_by="-reportdate",
+            page_size=max_records,
+        )
+        data = await client.get("/os/mxwo", params=params)
+        all_wos: List[Dict] = data.get("member", [])
+
+        # Validate filter field names + apply equality filters in Python
+        validated_filters: Dict[str, str] = {}
         if filters:
             for field, value in filters.items():
                 try:
                     safe_field_name(field)
                 except ValueError:
                     continue
-                where_parts.append(f'{field}="{oslc_escape(str(value))}"')
+                validated_filters[field] = str(value)
 
-        params = client.build_oslc_query(
-            where=" and ".join(where_parts),
-            select="wonum,description,status,priority,assetnum,worktype,reportdate,actfinish,actlabhrs,actlabcost",
-            order_by="-reportdate",
-            page_size=max_records,
-        )
-        data = await client.get("/os/mxwo", params=params)
-        wos: List[Dict] = data.get("member", [])
+        site_u = site_id.upper()
+        wos: List[Dict] = []
+        for wo in all_wos:
+            if (wo.get("siteid") or "").upper() != site_u:
+                continue
+            keep = True
+            for field, value in validated_filters.items():
+                if str(wo.get(field) or "").upper() != value.upper():
+                    keep = False
+                    break
+            if keep:
+                wos.append(wo)
 
         wb = openpyxl.Workbook()
         ws = wb.active
@@ -270,18 +288,20 @@ async def export_asset_report_pdf(
 
     try:
         client = await get_connected_client()
-        where_parts = [f'siteid="{oslc_escape(site_id)}"']
-        if asset_group:
-            where_parts.append(f'assettype="{oslc_escape(asset_group)}"')
-
+        # Single-condition WHERE on siteid; asset_group filter applied in Python.
         params = client.build_oslc_query(
-            where=" and ".join(where_parts),
-            select="assetnum,description,status,assettype,location,serialnum,installdate",
+            where=f'siteid="{oslc_escape(site_id)}"',
+            select="assetnum,description,status,assettype,location,serialnum,installdate,siteid",
             order_by="+assetnum",
             page_size=max_records,
         )
         data = await client.get("/os/mxasset", params=params)
-        assets: List[Dict] = data.get("member", [])
+        all_assets: List[Dict] = data.get("member", [])
+        site_u = site_id.upper()
+        assets = [a for a in all_assets if (a.get("siteid") or "").upper() == site_u]
+        if asset_group:
+            ag_u = asset_group.upper()
+            assets = [a for a in assets if (a.get("assettype") or "").upper() == ag_u]
 
         buf = io.BytesIO()
         doc = SimpleDocTemplate(buf, pagesize=A4)
@@ -378,3 +398,187 @@ async def generate_carbon_table(
 
     duration_ms = int((time.monotonic() - start) * 1000)
     return _envelope({"html": html, "record_count": len(data)}, duration_ms=duration_ms)
+
+
+@require_role("readonly")
+async def get_failure_pareto(
+    site_id: str,
+    asset_num: Optional[str] = None,
+    period_months: int = 12,
+    top_n: int = 10,
+) -> Dict[str, Any]:
+    """
+    Pareto chart of failure codes — the top N failure codes by frequency,
+    with running cumulative percentage. Answers "what 20% of failure modes
+    cause 80% of work?".
+
+    Implementation: single-condition OSLC fetch on assetnum (when given) or
+    siteid; date and worktype filters applied in Python because compound
+    WHERE clauses can drop the connection on some Maximo builds.
+
+    Args:
+        site_id:       Site to analyse
+        asset_num:     Optional asset filter (narrows to one machine)
+        period_months: Look-back window in months (default 12)
+        top_n:         Number of failure codes to return (default 10)
+    """
+    if not site_id:
+        return _error("site_id is required", "VALIDATION_ERROR")
+
+    start = time.monotonic()
+    cutoff = (datetime.now() - timedelta(days=period_months * 30)).strftime(
+        "%Y-%m-%dT00:00:00+00:00"
+    )
+
+    try:
+        client = await get_connected_client()
+        # Use the most-selective single-condition filter we have.
+        if asset_num:
+            where = f'assetnum="{oslc_escape(asset_num)}"'
+        else:
+            where = f'siteid="{oslc_escape(site_id)}"'
+        params = client.build_oslc_query(
+            where=where,
+            select="wonum,siteid,assetnum,worktype,failurecode,reportdate",
+            order_by="-reportdate",
+            page_size=200,
+        )
+        data = await client.get("/os/mxwo", params=params)
+        rows: List[Dict] = data.get("member", [])
+
+        site_u = site_id.upper()
+        corrective = {"CM", "EM"}
+        counts: Dict[str, int] = {}
+        total_with_code = 0
+        for w in rows:
+            if (w.get("siteid") or "").upper() != site_u:
+                continue
+            if (w.get("worktype") or "").upper() not in corrective:
+                continue
+            if (w.get("reportdate") or "") < cutoff:
+                continue
+            fc = (w.get("failurecode") or "").strip()
+            if not fc:
+                continue
+            counts[fc] = counts.get(fc, 0) + 1
+            total_with_code += 1
+
+        ranked = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
+        cumulative = 0
+        pareto = []
+        for code, count in ranked:
+            cumulative += count
+            pct = round((count / total_with_code) * 100, 1) if total_with_code else 0
+            cum_pct = round((cumulative / total_with_code) * 100, 1) if total_with_code else 0
+            pareto.append(
+                {
+                    "failure_code": code,
+                    "count": count,
+                    "pct": pct,
+                    "cumulative_pct": cum_pct,
+                }
+            )
+
+        duration_ms = int((time.monotonic() - start) * 1000)
+        return _envelope(
+            {
+                "site_id": site_id,
+                "asset_num": asset_num,
+                "period_months": period_months,
+                "total_corrective_wos": sum(
+                    1
+                    for w in rows
+                    if (w.get("siteid") or "").upper() == site_u
+                    and (w.get("worktype") or "").upper() in corrective
+                    and (w.get("reportdate") or "") >= cutoff
+                ),
+                "total_with_failure_code": total_with_code,
+                "pareto": pareto,
+            },
+            duration_ms=duration_ms,
+        )
+    except (MaximoAPIError, MaximoAuthError) as exc:
+        return _error(str(exc))
+    except Exception as exc:
+        return _error(f"Unexpected error [{type(exc).__name__}]: {exc!r}", "INTERNAL_ERROR")
+
+
+@require_role("readonly")
+async def get_bad_actor_assets(
+    site_id: str,
+    period_months: int = 12,
+    top_n: int = 10,
+) -> Dict[str, Any]:
+    """
+    Top-N "bad actor" assets — those with the most corrective work orders
+    over the look-back window. Each row also reports total labour hours
+    (a downtime proxy) so a planner can sort by cost rather than count.
+
+    Args:
+        site_id:       Site to analyse
+        period_months: Look-back window in months (default 12)
+        top_n:         Number of assets to return (default 10)
+    """
+    if not site_id:
+        return _error("site_id is required", "VALIDATION_ERROR")
+
+    start = time.monotonic()
+    cutoff = (datetime.now() - timedelta(days=period_months * 30)).strftime(
+        "%Y-%m-%dT00:00:00+00:00"
+    )
+
+    try:
+        client = await get_connected_client()
+        params = client.build_oslc_query(
+            where=f'siteid="{oslc_escape(site_id)}"',
+            select="wonum,siteid,assetnum,worktype,actlabhrs,actlabcost,reportdate",
+            order_by="-reportdate",
+            page_size=200,
+        )
+        data = await client.get("/os/mxwo", params=params)
+        rows: List[Dict] = data.get("member", [])
+
+        site_u = site_id.upper()
+        corrective = {"CM", "EM"}
+        counts: Dict[str, int] = {}
+        hours: Dict[str, float] = {}
+        cost: Dict[str, float] = {}
+        for w in rows:
+            if (w.get("siteid") or "").upper() != site_u:
+                continue
+            if (w.get("worktype") or "").upper() not in corrective:
+                continue
+            if (w.get("reportdate") or "") < cutoff:
+                continue
+            asset = (w.get("assetnum") or "").strip()
+            if not asset:
+                continue
+            counts[asset] = counts.get(asset, 0) + 1
+            hours[asset] = hours.get(asset, 0.0) + float(w.get("actlabhrs") or 0)
+            cost[asset] = cost.get(asset, 0.0) + float(w.get("actlabcost") or 0)
+
+        ranked = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
+        bad_actors = [
+            {
+                "asset_num": asset,
+                "corrective_wo_count": cnt,
+                "total_labor_hours": round(hours.get(asset, 0.0), 2),
+                "total_labor_cost": round(cost.get(asset, 0.0), 2),
+            }
+            for asset, cnt in ranked
+        ]
+
+        duration_ms = int((time.monotonic() - start) * 1000)
+        return _envelope(
+            {
+                "site_id": site_id,
+                "period_months": period_months,
+                "bad_actors": bad_actors,
+                "total_assets_with_corrective_wo": len(counts),
+            },
+            duration_ms=duration_ms,
+        )
+    except (MaximoAPIError, MaximoAuthError) as exc:
+        return _error(str(exc))
+    except Exception as exc:
+        return _error(f"Unexpected error [{type(exc).__name__}]: {exc!r}", "INTERNAL_ERROR")

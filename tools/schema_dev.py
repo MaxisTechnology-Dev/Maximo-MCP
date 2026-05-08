@@ -646,7 +646,7 @@ async def generate_api_code(
     settings = get_settings()
     base_url = settings.MAXIMO_URL
     os_endpoint = f"/os/{object_structure}"
-    where = where_clause or f'siteid="BEDFORD"'
+    where = where_clause or 'siteid="BEDFORD"'
 
     templates: Dict[str, Dict[str, str]] = {
         "python": {

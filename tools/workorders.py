@@ -21,6 +21,10 @@ from core.rbac import require_role
 # Kept for write operations and single-record lookups that must target
 # the primary object structure directly.
 WO_OS = "/os/mxwo"
+SR_OS = "/os/mxsr"
+# Job Plan OS naming varies by Maximo build — try mxjobplan first (legacy),
+# fall back to mxapijobplan (MAS 9.x).
+JP_OS_CANDIDATES = ("/os/mxjobplan", "/os/mxapijobplan")
 
 # Status values treated as "open" (not COMP / CAN / CLOSE) for status=OPEN filter.
 # Keep this list small so OSLC queries stay within typical DB timeouts on large WO tables.
@@ -718,6 +722,754 @@ async def get_workorder_kpis(site_id: str, period_months: int = 3) -> Dict[str, 
                 "top_assets_by_wo_count": [{"asset": a, "count": c} for a, c in top_assets],
             },
             duration_ms=duration_ms
+        )
+    except (MaximoAPIError, MaximoAuthError) as exc:
+        return _error(str(exc))
+    except Exception as exc:
+        return _error(f"Unexpected error [{type(exc).__name__}]: {exc!r}", "INTERNAL_ERROR")
+
+
+@require_role("readonly")
+async def list_service_requests(
+    site_id: Optional[str] = None,
+    status: Optional[str] = None,
+    reported_by: Optional[str] = None,
+    page_size: Optional[int] = None,
+    page_num: int = 1,
+) -> Dict[str, Any]:
+    """
+    List service requests (SRs) — the upstream intake records that typically
+    convert to work orders. Single-condition WHERE; remaining filters applied
+    in Python.
+
+    Args:
+        site_id:     Filter by site
+        status:      SR status (NEW, QUEUED, INPROG, RESOLVED, CLOSED, ...)
+        reported_by: Person who logged the SR
+        page_size:   Records per page (default 50, max 200)
+        page_num:    1-based page number
+    """
+    start = time.monotonic()
+    page_size = _resolve_page_size(page_size)
+
+    if status:
+        where = f'status="{oslc_escape(status)}"'
+    elif site_id:
+        where = f'siteid="{oslc_escape(site_id)}"'
+    else:
+        where = None
+
+    cache_key = f"maximo:sr_list:{site_id}:{status}:{reported_by}:{page_size}:{page_num}"
+    cache = get_cache()
+
+    async def fetch():
+        client = await get_connected_client()
+        params = client.build_oslc_query(
+            where=where,
+            select="ticketid,description,status,siteid,reportedby,reportdate,assetnum,location,worklog",
+            order_by="-reportdate",
+            page_size=200,
+            collectioncount=1,
+        )
+        return await client.get(SR_OS, params=params)
+
+    try:
+        try:
+            data, cached = await cache.get_or_fetch(cache_key, fetch, ttl=60)
+        except (MaximoAPIError, MaximoAuthError) as exc:
+            msg = str(exc)
+            if "404" in msg or "not found" in msg.lower():
+                return _error(
+                    "Service Request object structure not published in this Maximo instance (404 /os/mxsr).",
+                    "NOT_FOUND",
+                )
+            raise
+
+        members: List[Dict] = data.get("member", [])
+
+        def _matches(sr: Dict) -> bool:
+            if site_id and (sr.get("siteid") or "").upper() != site_id.upper():
+                return False
+            if status and (sr.get("status") or "").upper() != status.upper():
+                return False
+            if reported_by and (sr.get("reportedby") or "").upper() != reported_by.upper():
+                return False
+            return True
+
+        filtered = [s for s in members if _matches(s)]
+        total = len(filtered)
+        start_idx = (page_num - 1) * page_size
+        page_rows = filtered[start_idx:start_idx + page_size]
+        duration_ms = int((time.monotonic() - start) * 1000)
+        return _envelope(
+            {"service_requests": page_rows, "totalCount": total},
+            cached=cached, duration_ms=duration_ms, record_count=len(page_rows),
+        )
+    except (MaximoAPIError, MaximoAuthError) as exc:
+        return _error(str(exc))
+    except Exception as exc:
+        return _error(f"Unexpected error [{type(exc).__name__}]: {exc!r}", "INTERNAL_ERROR")
+
+
+@require_role("readonly")
+async def get_service_request(ticket_id: str, site_id: str) -> Dict[str, Any]:
+    """
+    Get full details for a specific service request including work log.
+
+    Args:
+        ticket_id: SR ticket id
+        site_id:   Site ID
+    """
+    if not ticket_id or not site_id:
+        return _error("ticket_id and site_id are required", "VALIDATION_ERROR")
+
+    start = time.monotonic()
+    cache_key = f"maximo:sr:{site_id}:{ticket_id}"
+    cache = get_cache()
+
+    async def fetch():
+        client = await get_connected_client()
+        params = client.build_oslc_query(
+            where=f'ticketid="{oslc_escape(ticket_id)}"',
+            select="ticketid,description,status,siteid,reportedby,reportdate,assetnum,location,worklog,description_longdescription",
+            page_size=5,
+        )
+        return await client.get(SR_OS, params=params)
+
+    try:
+        data, cached = await cache.get_or_fetch(cache_key, fetch, ttl=60)
+        members = [
+            m for m in data.get("member", [])
+            if (m.get("siteid") or "").upper() == site_id.upper()
+        ]
+        if not members:
+            return _error(f"Service request '{ticket_id}' not found in site '{site_id}'", "NOT_FOUND")
+        duration_ms = int((time.monotonic() - start) * 1000)
+        return _envelope(members[0], cached=cached, duration_ms=duration_ms)
+    except (MaximoAPIError, MaximoAuthError) as exc:
+        msg = str(exc)
+        if "404" in msg or "not found" in msg.lower():
+            return _error(
+                "Service Request object structure not published in this Maximo instance (404 /os/mxsr).",
+                "NOT_FOUND",
+            )
+        return _error(msg)
+    except Exception as exc:
+        return _error(f"Unexpected error [{type(exc).__name__}]: {exc!r}", "INTERNAL_ERROR")
+
+
+@require_role("readonly")
+async def list_job_plans(
+    site_id: Optional[str] = None,
+    keyword: Optional[str] = None,
+    active_only: bool = True,
+    page_size: Optional[int] = None,
+    page_num: int = 1,
+) -> Dict[str, Any]:
+    """
+    List job plans (reusable work templates) used by planners and PM schedules.
+    Single-condition WHERE; remaining filters applied in Python.
+
+    Args:
+        site_id:     Filter by ownership site (job plans may be site-scoped or global)
+        keyword:     Case-insensitive substring against jpnum or description
+        active_only: When True, omit job plans whose status is INACTIVE
+        page_size:   Records per page (default 50, max 200)
+        page_num:    1-based page number
+    """
+    start = time.monotonic()
+    page_size = _resolve_page_size(page_size)
+
+    where = f'siteid="{oslc_escape(site_id)}"' if site_id else None
+
+    cache_key = f"maximo:jp_list:{site_id}:{keyword}:{active_only}:{page_size}:{page_num}"
+    cache = get_cache()
+
+    async def fetch():
+        client = await get_connected_client()
+        params = client.build_oslc_query(
+            where=where,
+            select="jpnum,description,siteid,orgid,status,priority,jpduration,worktype",
+            order_by="+jpnum",
+            page_size=200,
+            collectioncount=1,
+        )
+        last_exc: Optional[Exception] = None
+        for endpoint in JP_OS_CANDIDATES:
+            try:
+                return await client.get(endpoint, params=params)
+            except (MaximoAPIError, MaximoAuthError) as exc:
+                msg = str(exc)
+                if "404" in msg or "not found" in msg.lower():
+                    last_exc = exc
+                    continue
+                raise
+        raise last_exc if last_exc else MaximoAPIError("All Job Plan OS candidates failed")
+
+    try:
+        try:
+            data, cached = await cache.get_or_fetch(cache_key, fetch, ttl=300)
+        except (MaximoAPIError, MaximoAuthError) as exc:
+            msg = str(exc)
+            if "404" in msg or "not found" in msg.lower():
+                tried = ", ".join(JP_OS_CANDIDATES)
+                return _error(
+                    f"Job Plan object structure not published in this Maximo instance (tried: {tried}).",
+                    "NOT_FOUND",
+                )
+            raise
+
+        members: List[Dict] = data.get("member", [])
+        kw = (keyword or "").lower()
+
+        def _matches(jp: Dict) -> bool:
+            if active_only and (jp.get("status") or "").upper() == "INACTIVE":
+                return False
+            if kw and kw not in (jp.get("jpnum") or "").lower() and kw not in (jp.get("description") or "").lower():
+                return False
+            return True
+
+        filtered = [jp for jp in members if _matches(jp)]
+        total = len(filtered)
+        start_idx = (page_num - 1) * page_size
+        page_rows = filtered[start_idx:start_idx + page_size]
+        duration_ms = int((time.monotonic() - start) * 1000)
+        return _envelope(
+            {"job_plans": page_rows, "totalCount": total},
+            cached=cached, duration_ms=duration_ms, record_count=len(page_rows),
+        )
+    except (MaximoAPIError, MaximoAuthError) as exc:
+        return _error(str(exc))
+    except Exception as exc:
+        return _error(f"Unexpected error [{type(exc).__name__}]: {exc!r}", "INTERNAL_ERROR")
+
+
+@require_role("readonly")
+async def get_my_assigned_workorders(
+    labor_code: Optional[str] = None,
+    site_id: Optional[str] = None,
+    open_only: bool = True,
+    page_size: Optional[int] = None,
+    page_num: int = 1,
+) -> Dict[str, Any]:
+    """
+    List work orders assigned to a specific labor (technician). When
+    ``labor_code`` is omitted, the value falls back to the current request
+    identity's user id — so an LLM can ask "what's on my plate today" without
+    knowing the labor code.
+
+    The query targets the planned-labor relationship on mxwo and excludes
+    terminal statuses (COMP/CLOSE/CAN) when ``open_only=True``.
+
+    Args:
+        labor_code: Labor (person) code to look up; defaults to the caller's identity
+        site_id:    Optional site filter (post-filter)
+        open_only:  When True, omit WOs with status COMP / CLOSE / CAN
+        page_size:  Records per page (default 50, max 200)
+        page_num:   1-based page number
+    """
+    start = time.monotonic()
+    page_size = _resolve_page_size(page_size)
+
+    if not labor_code:
+        try:
+            from core.identity import resolve_identity
+            ident = resolve_identity()
+            labor_code = getattr(ident, "user_id", None)
+        except Exception:
+            labor_code = None
+    if not labor_code:
+        return _error(
+            "labor_code is required (or set X-MCP-User-Id / CURRENT_USER_ID for identity-based lookup)",
+            "VALIDATION_ERROR",
+        )
+
+    cache_key = f"maximo:my_wo:{labor_code}:{site_id}:{open_only}:{page_size}:{page_num}"
+    cache = get_cache()
+
+    async def fetch():
+        client = await get_connected_client()
+        # Single-condition WHERE traversing wplabor; siteid/status filtered in Python.
+        params = client.build_oslc_query(
+            where=f'wplabor.laborcode="{oslc_escape(labor_code)}"',
+            select="wonum,description,status,wopriority,assetnum,siteid,worktype,reportdate,schedstart,targstartdate,targcompdate,location,wplabor",
+            order_by="-reportdate",
+            page_size=200,
+            collectioncount=1,
+        )
+        return await client.get(WO_OS, params=params)
+
+    try:
+        data, cached = await cache.get_or_fetch(cache_key, fetch, ttl=60)
+        members: List[Dict] = data.get("member", [])
+
+        terminal = {"COMP", "CLOSE", "CAN"}
+
+        def _matches(wo: Dict) -> bool:
+            if site_id and (wo.get("siteid") or "").upper() != site_id.upper():
+                return False
+            if open_only and (wo.get("status") or "").upper() in terminal:
+                return False
+            return True
+
+        filtered = [wo for wo in members if _matches(wo)]
+        total = len(filtered)
+        start_idx = (page_num - 1) * page_size
+        page_rows = filtered[start_idx:start_idx + page_size]
+        duration_ms = int((time.monotonic() - start) * 1000)
+        return _envelope(
+            {"labor_code": labor_code, "workorders": page_rows, "totalCount": total},
+            cached=cached, duration_ms=duration_ms, record_count=len(page_rows),
+        )
+    except (MaximoAPIError, MaximoAuthError) as exc:
+        return _error(str(exc))
+    except Exception as exc:
+        return _error(f"Unexpected error [{type(exc).__name__}]: {exc!r}", "INTERNAL_ERROR")
+
+
+@require_role("readonly")
+async def get_job_plan(jpnum: str, site_id: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Get full details for a single job plan including embedded child collections
+    (tasks, planned labor, planned material, planned tools, specifications).
+
+    Args:
+        jpnum:   Job plan number
+        site_id: Optional site filter (Python post-filter)
+    """
+    if not jpnum:
+        return _error("jpnum is required", "VALIDATION_ERROR")
+
+    start = time.monotonic()
+    cache_key = f"maximo:jp:{jpnum}:{site_id}"
+    cache = get_cache()
+
+    async def fetch():
+        client = await get_connected_client()
+        # Note: child collection names use "job*" not "jp*" on this Maximo build.
+        params = client.build_oslc_query(
+            where=f'jpnum="{oslc_escape(jpnum)}"',
+            select="jpnum,description,siteid,orgid,status,priority,jpduration,worktype,jobtask,joblabor,jobmaterial,jobtool,jobplanspec",
+            page_size=5,
+        )
+        last_exc: Optional[Exception] = None
+        for endpoint in JP_OS_CANDIDATES:
+            try:
+                return await client.get(endpoint, params=params)
+            except (MaximoAPIError, MaximoAuthError) as exc:
+                msg = str(exc)
+                if "404" in msg or "not found" in msg.lower():
+                    last_exc = exc
+                    continue
+                raise
+        raise last_exc if last_exc else MaximoAPIError("All Job Plan OS candidates failed")
+
+    try:
+        try:
+            data, cached = await cache.get_or_fetch(cache_key, fetch, ttl=300)
+        except (MaximoAPIError, MaximoAuthError) as exc:
+            msg = str(exc)
+            if "404" in msg or "not found" in msg.lower():
+                tried = ", ".join(JP_OS_CANDIDATES)
+                return _error(
+                    f"Job Plan object structure not published in this Maximo instance (tried: {tried}).",
+                    "NOT_FOUND",
+                )
+            raise
+
+        members: List[Dict] = data.get("member", [])
+        if site_id:
+            members = [m for m in members if (m.get("siteid") or "").upper() == site_id.upper()]
+        if not members:
+            return _error(f"Job plan '{jpnum}' not found{' in site ' + site_id if site_id else ''}.", "NOT_FOUND")
+
+        jp = members[0]
+        # Friendly summary so an LLM can read the structure at a glance.
+        summary = {
+            "jpnum": jp.get("jpnum"),
+            "description": jp.get("description"),
+            "siteid": jp.get("siteid"),
+            "duration_hours": jp.get("jpduration"),
+            "task_count": len(jp.get("jobtask") or []),
+            "planned_labor_lines": len(jp.get("joblabor") or []),
+            "planned_material_lines": len(jp.get("jobmaterial") or []),
+            "planned_tool_lines": len(jp.get("jobtool") or []),
+        }
+        duration_ms = int((time.monotonic() - start) * 1000)
+        return _envelope(
+            {"summary": summary, "job_plan": jp},
+            cached=cached, duration_ms=duration_ms,
+        )
+    except (MaximoAPIError, MaximoAuthError) as exc:
+        return _error(str(exc))
+    except Exception as exc:
+        return _error(f"Unexpected error [{type(exc).__name__}]: {exc!r}", "INTERNAL_ERROR")
+
+
+@require_role("readonly")
+async def get_workorder_costs(wonum: str, site_id: str) -> Dict[str, Any]:
+    """
+    Return the labor + material + service + tool actual cost breakdown for
+    a single work order. Useful for chargeback, cost-center reports, and
+    finance reconciliation.
+
+    Args:
+        wonum:   Work order number
+        site_id: Site ID (Python post-filter)
+    """
+    if not wonum or not site_id:
+        return _error("wonum and site_id are required", "VALIDATION_ERROR")
+
+    start = time.monotonic()
+    cache_key = f"maximo:wo_costs:{site_id}:{wonum}"
+    cache = get_cache()
+
+    async def fetch():
+        client = await get_connected_client()
+        params = client.build_oslc_query(
+            where=f'wonum="{oslc_escape(wonum)}"',
+            select="wonum,siteid,status,worktype,assetnum,location,actlabhrs,actlabcost,actmatcost,actservcost,acttoolcost,acttotalcost",
+            page_size=5,
+        )
+        return await client.get(WO_OS, params=params)
+
+    try:
+        data, cached = await cache.get_or_fetch(cache_key, fetch, ttl=60)
+        members = [m for m in data.get("member", []) if (m.get("siteid") or "").upper() == site_id.upper()]
+        if not members:
+            return _error(f"Work order '{wonum}' not found in site '{site_id}'.", "NOT_FOUND")
+        wo = members[0]
+
+        def _f(name: str) -> float:
+            return float(wo.get(name) or 0)
+
+        labor = _f("actlabcost")
+        material = _f("actmatcost")
+        service = _f("actservcost")
+        tool = _f("acttoolcost")
+        total = _f("acttotalcost") or (labor + material + service + tool)
+
+        breakdown = []
+        for cat, amount in (
+            ("labor", labor),
+            ("material", material),
+            ("service", service),
+            ("tool", tool),
+        ):
+            breakdown.append(
+                {
+                    "category": cat,
+                    "amount": round(amount, 2),
+                    "share_pct": round((amount / total) * 100, 1) if total else 0,
+                }
+            )
+
+        duration_ms = int((time.monotonic() - start) * 1000)
+        return _envelope(
+            {
+                "wonum": wonum,
+                "site_id": site_id,
+                "status": wo.get("status"),
+                "assetnum": wo.get("assetnum"),
+                "location": wo.get("location"),
+                "actual_hours": _f("actlabhrs"),
+                "total_cost": round(total, 2),
+                "breakdown": breakdown,
+            },
+            cached=cached, duration_ms=duration_ms,
+        )
+    except (MaximoAPIError, MaximoAuthError) as exc:
+        return _error(str(exc))
+    except Exception as exc:
+        return _error(f"Unexpected error [{type(exc).__name__}]: {exc!r}", "INTERNAL_ERROR")
+
+
+@require_role("readonly")
+async def get_workorder_actuals_vs_planned(wonum: str, site_id: str) -> Dict[str, Any]:
+    """
+    Compare estimated vs actual labor hours and cost for a work order.
+    Returns variance figures a planner can use to spot under/over-runs.
+
+    Args:
+        wonum:   Work order number
+        site_id: Site ID (Python post-filter)
+    """
+    if not wonum or not site_id:
+        return _error("wonum and site_id are required", "VALIDATION_ERROR")
+
+    start = time.monotonic()
+    cache_key = f"maximo:wo_actuals:{site_id}:{wonum}"
+    cache = get_cache()
+
+    async def fetch():
+        client = await get_connected_client()
+        params = client.build_oslc_query(
+            where=f'wonum="{oslc_escape(wonum)}"',
+            select="wonum,siteid,status,worktype,estlabhrs,actlabhrs,estlabcost,actlabcost,estmatcost,actmatcost,estservcost,actservcost,esttoolcost,acttoolcost,estatapprtotalcost,esttotalcost,acttotalcost",
+            page_size=5,
+        )
+        return await client.get(WO_OS, params=params)
+
+    try:
+        data, cached = await cache.get_or_fetch(cache_key, fetch, ttl=60)
+        members = [
+            m for m in data.get("member", [])
+            if (m.get("siteid") or "").upper() == site_id.upper()
+        ]
+        if not members:
+            return _error(f"Work order '{wonum}' not found in site '{site_id}'.", "NOT_FOUND")
+        wo = members[0]
+
+        def _f(name: str) -> float:
+            return float(wo.get(name) or 0)
+
+        est_hrs, act_hrs = _f("estlabhrs"), _f("actlabhrs")
+        est_lab, act_lab = _f("estlabcost"), _f("actlabcost")
+        est_mat, act_mat = _f("estmatcost"), _f("actmatcost")
+        est_srv, act_srv = _f("estservcost"), _f("actservcost")
+        est_tool, act_tool = _f("esttoolcost"), _f("acttoolcost")
+        est_total = _f("esttotalcost") or (est_lab + est_mat + est_srv + est_tool)
+        act_total = _f("acttotalcost") or (act_lab + act_mat + act_srv + act_tool)
+
+        def _variance(est: float, act: float) -> Dict[str, Any]:
+            return {
+                "estimated": round(est, 2),
+                "actual": round(act, 2),
+                "variance_abs": round(act - est, 2),
+                "variance_pct": round(((act - est) / est) * 100, 1) if est else None,
+                "over_budget": act > est,
+            }
+
+        duration_ms = int((time.monotonic() - start) * 1000)
+        return _envelope(
+            {
+                "wonum": wonum,
+                "site_id": site_id,
+                "status": wo.get("status"),
+                "worktype": wo.get("worktype"),
+                "labor_hours": _variance(est_hrs, act_hrs),
+                "labor_cost": _variance(est_lab, act_lab),
+                "material_cost": _variance(est_mat, act_mat),
+                "service_cost": _variance(est_srv, act_srv),
+                "tool_cost": _variance(est_tool, act_tool),
+                "total_cost": _variance(est_total, act_total),
+            },
+            cached=cached, duration_ms=duration_ms,
+        )
+    except (MaximoAPIError, MaximoAuthError) as exc:
+        return _error(str(exc))
+    except Exception as exc:
+        return _error(f"Unexpected error [{type(exc).__name__}]: {exc!r}", "INTERNAL_ERROR")
+
+
+@require_role("readonly")
+async def get_schedule_calendar(
+    site_id: str,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    group_by: str = "date",
+    page_size: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Return scheduled work orders within a date window grouped by date or
+    target start day. Useful for a planner's week-at-a-glance view.
+
+    Args:
+        site_id:   Site to fetch
+        date_from: ISO date — only include WOs with schedstart on/after this. Default: today
+        date_to:   ISO date — only include WOs with schedstart on/before this. Default: today + 14 days
+        group_by:  "date" (default) buckets by yyyy-mm-dd of schedstart; any other value returns the raw flat list
+        page_size: Records per page (default 200, max 200)
+    """
+    if not site_id:
+        return _error("site_id is required", "VALIDATION_ERROR")
+    page_size = max(1, min(int(page_size or 200), 200))
+
+    start = time.monotonic()
+    now = datetime.now()
+    if not date_from:
+        date_from = now.strftime("%Y-%m-%d")
+    if not date_to:
+        date_to = (now + timedelta(days=14)).strftime("%Y-%m-%d")
+
+    # Strip tzinfo from window bounds so we can compare against Maximo dates
+    # (which may be naive or aware depending on the column).
+    df_raw = _parse_dt_loose(date_from)
+    dt_raw = _parse_dt_loose(date_to + "T23:59:59") if len(date_to) == 10 else _parse_dt_loose(date_to)
+    df = df_raw.replace(tzinfo=None) if df_raw else None
+    dt = dt_raw.replace(tzinfo=None) if dt_raw else None
+
+    cache_key = f"maximo:schedule:{site_id}:{date_from}:{date_to}"
+    cache = get_cache()
+
+    async def fetch():
+        client = await get_connected_client()
+        params = client.build_oslc_query(
+            where=f'siteid="{oslc_escape(site_id)}"',
+            select="wonum,description,status,siteid,assetnum,wopriority,worktype,schedstart,schedfinish,targstartdate,targcompdate,lead",
+            order_by="-reportdate",
+            page_size=page_size,
+        )
+        return await client.get(WO_OS, params=params)
+
+    try:
+        data, cached = await cache.get_or_fetch(cache_key, fetch, ttl=60)
+        members: List[Dict] = data.get("member", [])
+
+        terminal = {"COMP", "CLOSE", "CAN"}
+        in_window: List[Dict] = []
+        for w in members:
+            if (w.get("status") or "").upper() in terminal:
+                continue
+            ss_raw = _parse_dt_loose(w.get("schedstart") or w.get("targstartdate"))
+            if ss_raw is None:
+                continue
+            ss = ss_raw.replace(tzinfo=None)  # normalise for comparison
+            if df and ss < df:
+                continue
+            if dt and ss > dt:
+                continue
+            in_window.append(w)
+
+        if group_by == "date":
+            buckets: Dict[str, List[Dict]] = {}
+            for w in in_window:
+                ss_b = _parse_dt_loose(w.get("schedstart") or w.get("targstartdate"))
+                key = ss_b.strftime("%Y-%m-%d") if ss_b else "(no_schedstart)"
+                buckets.setdefault(key, []).append(w)
+            grouped = [
+                {"date": d, "count": len(rows), "workorders": rows}
+                for d, rows in sorted(buckets.items())
+            ]
+            payload = {
+                "site_id": site_id,
+                "date_from": date_from,
+                "date_to": date_to,
+                "total_scheduled": len(in_window),
+                "by_date": grouped,
+            }
+        else:
+            payload = {
+                "site_id": site_id,
+                "date_from": date_from,
+                "date_to": date_to,
+                "total_scheduled": len(in_window),
+                "workorders": in_window,
+            }
+
+        duration_ms = int((time.monotonic() - start) * 1000)
+        return _envelope(payload, cached=cached, duration_ms=duration_ms, record_count=len(in_window))
+    except (MaximoAPIError, MaximoAuthError) as exc:
+        return _error(str(exc))
+    except Exception as exc:
+        return _error(f"Unexpected error [{type(exc).__name__}]: {exc!r}", "INTERNAL_ERROR")
+
+
+@require_role("readonly")
+async def estimate_workorder_cost(jpnum: str, site_id: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Estimate the labor + material + tool cost of executing a job plan.
+    Sums numeric child-collection fields on the Job Plan record so a
+    planner sees expected cost before issuing a WO.
+
+    Args:
+        jpnum:   Job plan number
+        site_id: Optional site filter (Python post-filter)
+    """
+    jp_resp = await get_job_plan(jpnum=jpnum, site_id=site_id)
+    if not jp_resp.get("success"):
+        return jp_resp
+    jp = jp_resp["data"]["job_plan"]
+
+    def _to_f(v: Any) -> float:
+        try:
+            return float(v or 0)
+        except Exception:
+            return 0.0
+
+    labor_hours = labor_cost = 0.0
+    for line in jp.get("joblabor") or []:
+        labor_hours += _to_f(line.get("laborhrs"))
+        labor_cost += _to_f(line.get("laborcost") or line.get("linecost") or line.get("estunitcost"))
+
+    material_cost = 0.0
+    material_qty = 0.0
+    for line in jp.get("jobmaterial") or []:
+        material_qty += _to_f(line.get("itemqty") or line.get("quantity"))
+        material_cost += _to_f(line.get("linecost") or line.get("unitcost") or line.get("estunitcost"))
+
+    tool_cost = tool_hours = 0.0
+    for line in jp.get("jobtool") or []:
+        tool_hours += _to_f(line.get("toolhrs"))
+        tool_cost += _to_f(line.get("toolrate") or line.get("linecost"))
+
+    grand_total = round(labor_cost + material_cost + tool_cost, 2)
+
+    return {
+        "success": True,
+        "data": {
+            "jpnum": jp.get("jpnum"),
+            "description": jp.get("description"),
+            "site_id": jp.get("siteid"),
+            "duration_hours": jp.get("jpduration"),
+            "labor": {
+                "lines": len(jp.get("joblabor") or []),
+                "hours": round(labor_hours, 2),
+                "cost": round(labor_cost, 2),
+            },
+            "material": {
+                "lines": len(jp.get("jobmaterial") or []),
+                "qty": round(material_qty, 2),
+                "cost": round(material_cost, 2),
+            },
+            "tool": {
+                "lines": len(jp.get("jobtool") or []),
+                "hours": round(tool_hours, 2),
+                "cost": round(tool_cost, 2),
+            },
+            "estimated_total_cost": grand_total,
+            "task_count": len(jp.get("jobtask") or []),
+        },
+        "metadata": jp_resp.get("metadata", {}),
+    }
+
+
+@require_role("readonly")
+async def get_workorder_tasks(wonum: str, site_id: str) -> Dict[str, Any]:
+    """
+    List the task breakdown of a parent work order. Tasks are themselves
+    work-order rows whose ``parent`` field references the given ``wonum``.
+
+    Args:
+        wonum:   Parent work order number
+        site_id: Site ID (used as a Python post-filter)
+    """
+    if not wonum or not site_id:
+        return _error("wonum and site_id are required", "VALIDATION_ERROR")
+
+    start = time.monotonic()
+    cache_key = f"maximo:wo_tasks:{site_id}:{wonum}"
+    cache = get_cache()
+
+    async def fetch():
+        client = await get_connected_client()
+        params = client.build_oslc_query(
+            where=f'parent="{oslc_escape(wonum)}"',
+            select="wonum,parent,taskid,description,status,siteid,assetnum,location,wopriority,schedstart,targcompdate,actfinish,actlabhrs",
+            order_by="+taskid",
+            page_size=200,
+        )
+        return await client.get(WO_OS, params=params)
+
+    try:
+        data, cached = await cache.get_or_fetch(cache_key, fetch, ttl=60)
+        members: List[Dict] = data.get("member", [])
+        tasks = [t for t in members if (t.get("siteid") or "").upper() == site_id.upper()]
+        tasks.sort(key=lambda t: (t.get("taskid") or 0))
+        duration_ms = int((time.monotonic() - start) * 1000)
+        return _envelope(
+            {"parent_wonum": wonum, "site_id": site_id, "tasks": tasks},
+            cached=cached, duration_ms=duration_ms, record_count=len(tasks),
         )
     except (MaximoAPIError, MaximoAuthError) as exc:
         return _error(str(exc))

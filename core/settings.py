@@ -6,7 +6,6 @@ Supports both API key and username/password (Basic Auth) modes.
 from typing import List, Literal, Optional
 from pydantic_settings import BaseSettings
 from pydantic import field_validator, model_validator
-import os
 
 
 class Settings(BaseSettings):

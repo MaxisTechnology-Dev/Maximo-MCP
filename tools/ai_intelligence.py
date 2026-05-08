@@ -8,7 +8,7 @@ import re
 import statistics
 import time
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from core.maximo_client import MaximoAPIError, MaximoAuthError, get_connected_client
 from core.oslc_utils import (
@@ -266,14 +266,24 @@ async def detect_asset_anomalies(
 
     try:
         client = await get_connected_client()
+        # Single-condition WHERE — compound clauses cause connection drops on some
+        # Maximo builds. Site, date, and worktype filters applied in Python below.
         params = client.build_oslc_query(
-            where=f'assetnum="{oslc_escape(asset_num)}" and siteid="{oslc_escape(site_id)}" and reportdate>="{cutoff}" and worktype in ["CM","EM"]',
-            select="wonum,reportdate,actfinish,actlabhrs,failurecode",
-            order_by="+reportdate",
-            page_size=500,
+            where=f'assetnum="{oslc_escape(asset_num)}"',
+            select="wonum,siteid,worktype,reportdate,actfinish,actlabhrs,failurecode",
+            order_by="-reportdate",
+            page_size=200,
         )
         data = await client.get("/os/mxwo", params=params)
-        wos: List[Dict] = data.get("member", [])
+        raw: List[Dict] = data.get("member", [])
+        site_u = site_id.upper()
+        corrective = {"CM", "EM"}
+        wos: List[Dict] = [
+            w for w in raw
+            if (w.get("siteid") or "").upper() == site_u
+            and (w.get("worktype") or "").upper() in corrective
+            and (w.get("reportdate") or "") >= cutoff
+        ]
 
         # Group failures by week
         weekly_counts: Dict[str, int] = {}
@@ -361,14 +371,22 @@ async def suggest_root_cause(
         client = await get_connected_client()
         # Get recent failure history
         cutoff = (datetime.now() - timedelta(days=730)).strftime("%Y-%m-%dT00:00:00+00:00")
+        # Single-condition WHERE — siteid, worktype, date filtered in Python.
         params = client.build_oslc_query(
-            where=f'assetnum="{oslc_escape(asset_num)}" and siteid="{oslc_escape(site_id)}" and reportdate>="{cutoff}" and worktype in ["CM","EM"]',
-            select="wonum,description,failurecode,actlabhrs,reportdate",
+            where=f'assetnum="{oslc_escape(asset_num)}"',
+            select="wonum,description,failurecode,actlabhrs,reportdate,siteid,worktype",
             order_by="-reportdate",
-            page_size=50,
+            page_size=200,
         )
-        history_data = await client.get("/os/mxwo", params=params)
-        history: List[Dict] = history_data.get("member", [])
+        history_raw_data = await client.get("/os/mxwo", params=params)
+        site_u = site_id.upper()
+        corrective = {"CM", "EM"}
+        history: List[Dict] = [
+            w for w in history_raw_data.get("member", [])
+            if (w.get("siteid") or "").upper() == site_u
+            and (w.get("worktype") or "").upper() in corrective
+            and (w.get("reportdate") or "") >= cutoff
+        ][:50]
 
         # Tally failure codes
         fc_counts: Dict[str, int] = {}
@@ -475,23 +493,45 @@ async def summarize_asset_health(asset_num: str, site_id: str) -> Dict[str, Any]
     try:
         client = await get_connected_client()
 
-        # Fetch recent work orders
+        # Fetch recent work orders — single-condition WHERE; site/date filtered in Python.
         wo_params = client.build_oslc_query(
-            where=f'assetnum="{oslc_escape(asset_num)}" and siteid="{oslc_escape(site_id)}" and reportdate>="{cutoff_90}"',
-            select="wonum,status,worktype,actlabhrs,reportdate,actfinish",
+            where=f'assetnum="{oslc_escape(asset_num)}"',
+            select="wonum,siteid,status,worktype,actlabhrs,reportdate,actfinish",
+            order_by="-reportdate",
             page_size=200,
         )
         wo_data = await client.get("/os/mxwo", params=wo_params)
-        wos: List[Dict] = wo_data.get("member", [])
+        site_u = site_id.upper()
+        wos: List[Dict] = [
+            w for w in wo_data.get("member", [])
+            if (w.get("siteid") or "").upper() == site_u
+            and (w.get("reportdate") or "") >= cutoff_90
+        ]
 
-        # Fetch PM compliance
-        pm_params = client.build_oslc_query(
-            where=f'assetnum="{oslc_escape(asset_num)}" and siteid="{oslc_escape(site_id)}" and status="ACTIVE"',
-            select="pmnum,nextduedate,lastcompdate,frequency,frequnit",
-            page_size=50,
-        )
-        pm_data = await client.get("/os/mxpm", params=pm_params)
-        pms: List[Dict] = pm_data.get("member", [])
+        # Fetch PM compliance — single-condition WHERE; site/status filtered in Python.
+        # Some Maximo builds publish only mxapipm; try both gracefully.
+        pms: List[Dict] = []
+        for pm_endpoint in ("/os/mxpm", "/os/mxapipm"):
+            try:
+                pm_params = client.build_oslc_query(
+                    where=f'assetnum="{oslc_escape(asset_num)}"',
+                    select="pmnum,siteid,status,nextduedate,lastcompdate,frequency,frequnit",
+                    page_size=50,
+                )
+                pm_data = await client.get(pm_endpoint, params=pm_params)
+                pms = [
+                    p for p in pm_data.get("member", [])
+                    if (p.get("siteid") or "").upper() == site_u
+                    and (p.get("status") or "").upper() == "ACTIVE"
+                ]
+                break
+            except (MaximoAPIError, MaximoAuthError) as exc:
+                msg = str(exc)
+                if "404" in msg or "not found" in msg.lower():
+                    continue
+                # Non-404 errors mean PM data is degraded; continue with empty pms.
+                pms = []
+                break
 
         # Calculate metrics
         total_wos = len(wos)

@@ -2,7 +2,6 @@
 tests/test_auth.py — Authentication and settings tests.
 """
 
-import os
 import pytest
 
 

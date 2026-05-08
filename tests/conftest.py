@@ -4,7 +4,7 @@ tests/conftest.py — Shared fixtures for Maximo Enterprise MCP tests.
 
 import os
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 # Set test environment variables before importing settings
 os.environ.setdefault("MAXIMO_URL", "https://test-maximo.example.com/maximo/oslc")
