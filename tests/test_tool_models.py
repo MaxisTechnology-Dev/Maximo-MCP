@@ -48,8 +48,9 @@ def test_runtime_binding_resolves_every_tool():
         import server
     except (ImportError, AttributeError) as exc:
         pytest.skip(f"server module import failed (pre-existing env issue): {exc}")
-    bound = bind_runtime(server)
-    assert len(bound) == len(TOOL_METADATA)
+    else:
+        bound = bind_runtime(server)
+        assert len(bound) == len(TOOL_METADATA)
 
 
 # ── extra="forbid" enforcement -------------------------------------------------
@@ -127,17 +128,18 @@ def test_model_fields_subset_of_tool_signature():
         import server
     except (ImportError, AttributeError) as exc:
         pytest.skip(f"server module import failed (pre-existing env issue): {exc}")
-    bound = bind_runtime(server)
-    for name, spec in bound.items():
-        if spec.request_model is None or spec.func is None:
-            continue
-        model_fields = set(spec.request_model.model_fields.keys())
-        sig_params = set(inspect.signature(spec.func).parameters.keys()) - {"self", "cls"}
-        # Model fields must all be valid kwargs of the tool function.
-        # (The tool may legitimately accept aliases not in the model — only
-        # check the strict direction: every model field is a real kwarg.)
-        unknown = model_fields - sig_params
-        assert not unknown, (
-            f"{name}: model declares fields {unknown} that are not kwargs of "
-            f"the tool function. Model out-of-date with tool signature."
-        )
+    else:
+        bound = bind_runtime(server)
+        for name, spec in bound.items():
+            if spec.request_model is None or spec.func is None:
+                continue
+            model_fields = set(spec.request_model.model_fields.keys())
+            sig_params = set(inspect.signature(spec.func).parameters.keys()) - {"self", "cls"}
+            # Model fields must all be valid kwargs of the tool function.
+            # (The tool may legitimately accept aliases not in the model — only
+            # check the strict direction: every model field is a real kwarg.)
+            unknown = model_fields - sig_params
+            assert not unknown, (
+                f"{name}: model declares fields {unknown} that are not kwargs of "
+                f"the tool function. Model out-of-date with tool signature."
+            )

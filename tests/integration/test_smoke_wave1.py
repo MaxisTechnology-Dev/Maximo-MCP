@@ -79,7 +79,6 @@ async def _run_smoke() -> List[Tuple[str, Dict[str, Any]]]:
     # Discover a site_id by listing existing work orders. Default fallback BEDFORD.
     site_id = "BEDFORD"
     sample_wonum: Optional[str] = None
-    sample_vendor: Optional[str] = None
     sample_item: Optional[str] = None
     sample_storeroom: Optional[str] = None
     sample_sr: Optional[str] = None
@@ -111,8 +110,6 @@ async def _run_smoke() -> List[Tuple[str, Dict[str, Any]]]:
     )
     if ok:
         pos = payload["data"].get("purchase_orders", [])
-        if pos:
-            sample_vendor = pos[0].get("vendor") or sample_vendor
         note = f"records={len(pos)}, total={payload['data'].get('totalCount', 0)}"
     else:
         note = _truncate(payload.get("error") or payload)
@@ -125,8 +122,6 @@ async def _run_smoke() -> List[Tuple[str, Dict[str, Any]]]:
     )
     if ok:
         vendors = payload["data"].get("vendors", [])
-        if vendors and not sample_vendor:
-            sample_vendor = vendors[0].get("company")
         note = f"records={len(vendors)}, total={payload['data'].get('totalCount', 0)}"
     else:
         note = _truncate(payload.get("error") or payload)
