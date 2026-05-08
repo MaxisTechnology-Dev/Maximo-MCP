@@ -12,7 +12,7 @@ This project now exposes:
 - A hosted HTTP/SSE mode for remote MCP access.
 - A FastAPI tool layer for OpenAI, Gemini, Grok, and custom orchestrators.
 
-The current stable surface is `31` public tools across assets, work orders, inventory, purchasing, labor, locations, reporting, schema discovery, and administration.
+The current stable surface is `69` public tools across assets, asset reliability (failure classes, meter readings, criticality, warranty status), work orders, work order planning (job plan detail, actuals vs planned, schedule calendar, cost estimate, cost breakdown), service requests, job plans, inventory (item master, storerooms, valuation, critical-spares check), purchasing (POs, requisitions, vendors, spend analysis), labor (crafts, available-technician finder), locations, reporting (failure Pareto, bad actor assets, Excel + PDF export), AI intelligence (anomaly detection, root cause, health scoring), compliance & EHS (calibrations due, inspections due, permits, certifications expiring, incidents, compliance dashboard), schema discovery, and administration.
 
 ## Responsible Use
 
@@ -321,10 +321,20 @@ pytest -m "not integration"
 
 ### Run integration tests
 
-Integration tests hit a real Maximo instance configured in `.env`.
+Integration tests hit a real Maximo instance configured in `.env`. Two suites:
+
+- `tests/integration_test_tools.py` — tool-by-tool smoke against a single live Maximo
+- `tests/integration/test_smoke_wave[1-4].py` — per-wave smoke runs that gate every public tool added in waves 1–4/6
 
 ```bash
-pytest tests/integration_test_tools.py -m integration -v
+# Run every integration test (skipped automatically if MAXIMO_URL is unset)
+pytest tests/integration -m integration -v
+
+# Run a single wave's smoke
+pytest tests/integration/test_smoke_wave2.py -m integration -v
+
+# Or run a wave standalone for ad-hoc debugging
+python tests/integration/test_smoke_wave2.py
 ```
 
 ### List registered MCP tools

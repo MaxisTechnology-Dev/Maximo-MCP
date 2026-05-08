@@ -3,7 +3,6 @@ core/cache.py — Redis cache wrapper with TTL helpers.
 Falls back to a simple in-process dict when Redis is unavailable.
 """
 
-import asyncio
 import fnmatch
 import json
 import logging

@@ -8,10 +8,8 @@ file with rotation, stdout for cloud-native log shipping, or a composite.
 query() reads back records and only works against a file-backed sink.
 """
 
-import asyncio
 import json
 import logging
-import os
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path

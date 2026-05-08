@@ -16,6 +16,7 @@ INV_OS = "/os/mxinventory"
 ITEM_OS = "/os/mxitem"
 TRANSFER_OS = "/os/mxinvtrans"
 MATREC_OS = "/os/mxmatrectrans"
+LOC_OS = "/os/mxoperloc"
 
 
 def _envelope(data: Any, cached: bool = False, duration_ms: int = 0, record_count: Optional[int] = None) -> Dict:
@@ -282,6 +283,174 @@ async def transfer_inventory(
 
 
 @require_role("readonly")
+async def list_items(
+    keyword: Optional[str] = None,
+    item_type: Optional[str] = None,
+    commodity_group: Optional[str] = None,
+    page_size: Optional[int] = None,
+    page_num: int = 1,
+) -> Dict[str, Any]:
+    """
+    List item-master records (catalog of stocked + non-stocked items).
+
+    Single-condition WHERE only — additional filters are applied in Python
+    after fetch to remain compatible with Maximo instances that reject
+    compound OSLC clauses.
+
+    Args:
+        keyword:         Case-insensitive substring match against itemnum or description
+        item_type:       Item type code (ITEM, SERVICE, TOOL, ...)
+        commodity_group: Commodity group code
+        page_size:       Records per page (default 50, max 200)
+        page_num:        1-based page number
+    """
+    start = time.monotonic()
+    page_size = max(1, min(int(page_size or 50), 200))
+
+    # Pick exactly one server-side filter; remainder go to Python post-filter.
+    if item_type:
+        where = f'itemtype="{oslc_escape(item_type)}"'
+    elif commodity_group:
+        where = f'commoditygroup="{oslc_escape(commodity_group)}"'
+    else:
+        where = None
+
+    cache_key = f"maximo:items:{keyword}:{item_type}:{commodity_group}:{page_size}:{page_num}"
+    cache = get_cache()
+
+    async def fetch():
+        client = await get_connected_client()
+        params = client.build_oslc_query(
+            where=where,
+            select="itemnum,description,itemtype,commodity,commoditygroup,issueunit,orderunit,status,inspectionrequired,lottype",
+            order_by="+itemnum",
+            page_size=200,
+            collectioncount=1,
+        )
+        return await client.get(ITEM_OS, params=params)
+
+    try:
+        data, cached = await cache.get_or_fetch(cache_key, fetch, ttl=300)
+        members: List[Dict] = data.get("member", [])
+        kw = (keyword or "").lower()
+
+        def _matches(it: Dict) -> bool:
+            if kw and kw not in (it.get("itemnum") or "").lower() and kw not in (it.get("description") or "").lower():
+                return False
+            if item_type and (it.get("itemtype") or "").upper() != item_type.upper():
+                return False
+            if commodity_group and (it.get("commoditygroup") or "").upper() != commodity_group.upper():
+                return False
+            return True
+
+        filtered = [it for it in members if _matches(it)]
+        total = len(filtered)
+        start_idx = (page_num - 1) * page_size
+        page_rows = filtered[start_idx:start_idx + page_size]
+        duration_ms = int((time.monotonic() - start) * 1000)
+        return _envelope(
+            {"items": page_rows, "totalCount": total},
+            cached=cached, duration_ms=duration_ms, record_count=len(page_rows),
+        )
+    except (MaximoAPIError, MaximoAuthError) as exc:
+        return _error(str(exc))
+    except Exception as exc:
+        return _error(f"Unexpected error [{type(exc).__name__}]: {exc!r}", "INTERNAL_ERROR")
+
+
+@require_role("readonly")
+async def get_item(item_num: str) -> Dict[str, Any]:
+    """
+    Get full item-master details for a specific item number.
+
+    Args:
+        item_num: Item number to fetch
+    """
+    if not item_num:
+        return _error("item_num is required", "VALIDATION_ERROR")
+
+    start = time.monotonic()
+    cache_key = f"maximo:item:{item_num}"
+    cache = get_cache()
+
+    async def fetch():
+        client = await get_connected_client()
+        params = client.build_oslc_query(
+            where=f'itemnum="{oslc_escape(item_num)}"',
+            select="itemnum,description,itemtype,commodity,commoditygroup,issueunit,orderunit,status,inspectionrequired,lottype,manufacturer,modelnum,description_longdescription",
+            page_size=5,
+        )
+        return await client.get(ITEM_OS, params=params)
+
+    try:
+        data, cached = await cache.get_or_fetch(cache_key, fetch, ttl=300)
+        members: List[Dict] = data.get("member", [])
+        if not members:
+            return _error(f"Item '{item_num}' not found", "NOT_FOUND")
+        duration_ms = int((time.monotonic() - start) * 1000)
+        return _envelope(members[0], cached=cached, duration_ms=duration_ms)
+    except (MaximoAPIError, MaximoAuthError) as exc:
+        return _error(str(exc))
+    except Exception as exc:
+        return _error(f"Unexpected error [{type(exc).__name__}]: {exc!r}", "INTERNAL_ERROR")
+
+
+@require_role("readonly")
+async def list_storerooms(
+    site_id: str,
+    active_only: bool = True,
+) -> Dict[str, Any]:
+    """
+    List storeroom locations for a site. Storerooms are operating locations
+    with type=STOREROOM. The result is the input vocabulary for
+    `check_stock_level`, `create_material_request`, and `transfer_inventory`.
+
+    Args:
+        site_id:     Site to list storerooms for
+        active_only: When True, omit non-OPERATING locations
+    """
+    if not site_id:
+        return _error("site_id is required", "VALIDATION_ERROR")
+
+    start = time.monotonic()
+    cache_key = f"maximo:storerooms:{site_id}:{active_only}"
+    cache = get_cache()
+
+    async def fetch():
+        # Single-condition WHERE only — fetch by type, post-filter siteid in Python.
+        client = await get_connected_client()
+        params = client.build_oslc_query(
+            where='type="STOREROOM"',
+            select="location,description,siteid,status,type,parent",
+            order_by="+location",
+            page_size=200,
+            collectioncount=1,
+        )
+        return await client.get(LOC_OS, params=params)
+
+    try:
+        data, cached = await cache.get_or_fetch(cache_key, fetch, ttl=600)
+        members: List[Dict] = data.get("member", [])
+        site_u = site_id.upper()
+        rooms = []
+        for r in members:
+            if (r.get("siteid") or "").upper() != site_u:
+                continue
+            if active_only and (r.get("status") or "").upper() not in ("", "OPERATING", "ACTIVE"):
+                continue
+            rooms.append(r)
+        duration_ms = int((time.monotonic() - start) * 1000)
+        return _envelope(
+            {"site_id": site_id, "storerooms": rooms},
+            cached=cached, duration_ms=duration_ms, record_count=len(rooms),
+        )
+    except (MaximoAPIError, MaximoAuthError) as exc:
+        return _error(str(exc))
+    except Exception as exc:
+        return _error(f"Unexpected error [{type(exc).__name__}]: {exc!r}", "INTERNAL_ERROR")
+
+
+@require_role("readonly")
 async def get_reorder_recommendations(site_id: str) -> Dict[str, Any]:
     """
     Get inventory reorder recommendations based on current stock levels and usage.
@@ -323,3 +492,223 @@ async def get_reorder_recommendations(site_id: str) -> Dict[str, Any]:
         {"site_id": site_id, "recommendations": recommendations, "total_items": len(recommendations)},
         duration_ms=duration_ms, record_count=len(recommendations)
     )
+
+
+def _avg_cost_from_invcost(invcost_lines: List[Dict[str, Any]]) -> float:
+    """
+    Pull a representative unit cost out of the embedded `invcost` child collection.
+    Maximo stores cost in MXINVCOST rows with fields like `avgcost`, `lastcost`, `stdcost`.
+    Prefer avgcost, fall back to lastcost, then stdcost.
+    """
+    for cost_field in ("avgcost", "lastcost", "stdcost"):
+        for row in invcost_lines:
+            v = row.get(cost_field)
+            if v not in (None, "", 0):
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    continue
+    return 0.0
+
+
+@require_role("readonly")
+async def get_inventory_valuation(
+    site_id: str,
+    storeroom: Optional[str] = None,
+    top_n: int = 20,
+) -> Dict[str, Any]:
+    """
+    Compute total inventory valuation (sum of curbal × avgcost) for a site
+    or a specific storeroom. Returns an overall total plus the top-N items
+    by line value — useful for finance reconciliation and dead-stock review.
+
+    Args:
+        site_id:   Site to value
+        storeroom: Optional storeroom filter (Python post-filter)
+        top_n:     Number of top-valued items to return (default 20)
+    """
+    if not site_id:
+        return _error("site_id is required", "VALIDATION_ERROR")
+
+    start = time.monotonic()
+
+    try:
+        client = await get_connected_client()
+        # Single-condition WHERE on siteid; storeroom filtered in Python.
+        # `invcost` is requested as an embedded child collection — it returns
+        # inline as a list of {avgcost, lastcost, stdcost} rows on this build.
+        params = client.build_oslc_query(
+            where=f'siteid="{oslc_escape(site_id)}"',
+            select="itemnum,siteid,storeloc,curbal,abctype,invcost",
+            page_size=200,
+        )
+        data = await client.get(INV_OS, params=params)
+        rows: List[Dict] = data.get("member", [])
+
+        site_u = site_id.upper()
+        sr_u = storeroom.upper() if storeroom else None
+        in_scope: List[Dict] = []
+        for r in rows:
+            if (r.get("siteid") or "").upper() != site_u:
+                continue
+            if sr_u and (r.get("storeloc") or "").upper() != sr_u:
+                continue
+            in_scope.append(r)
+
+        valued: List[Dict[str, Any]] = []
+        total_value = 0.0
+        for r in in_scope:
+            qty = float(r.get("curbal") or 0)
+            unit_cost = _avg_cost_from_invcost(r.get("invcost") or [])
+            line_value = qty * unit_cost
+            total_value += line_value
+            valued.append(
+                {
+                    "itemnum": r.get("itemnum"),
+                    "storeroom": r.get("storeloc"),
+                    "curbal": qty,
+                    "unit_cost": round(unit_cost, 4),
+                    "line_value": round(line_value, 2),
+                    "abctype": r.get("abctype"),
+                }
+            )
+
+        valued.sort(key=lambda x: x["line_value"], reverse=True)
+        items_with_cost = sum(1 for v in valued if v["unit_cost"] > 0)
+
+        duration_ms = int((time.monotonic() - start) * 1000)
+        return _envelope(
+            {
+                "site_id": site_id,
+                "storeroom": storeroom,
+                "total_items": len(in_scope),
+                "items_with_known_cost": items_with_cost,
+                "total_valuation": round(total_value, 2),
+                "top_items": valued[:top_n],
+            },
+            duration_ms=duration_ms, record_count=len(in_scope),
+        )
+    except (MaximoAPIError, MaximoAuthError) as exc:
+        return _error(str(exc))
+    except Exception as exc:
+        return _error(f"Unexpected error [{type(exc).__name__}]: {exc!r}", "INTERNAL_ERROR")
+
+
+@require_role("readonly")
+async def get_critical_spares_check(
+    site_id: str,
+    priority_threshold: int = 2,
+) -> Dict[str, Any]:
+    """
+    For each critical asset (priority ≤ priority_threshold), report the
+    spare parts on its BOM and whether each is below its inventory reorder
+    point. Surfaces stock-out risk for the assets that matter most.
+
+    Note: Maximo exposes asset spare parts via the `sparepart` child
+    collection on `mxasset`. On builds where that collection is not
+    populated through OSLC, this tool returns the critical-asset list
+    annotated with a `data_unavailable` flag so the caller can take
+    operational action (e.g. ask their Maximo admin to enable it).
+
+    Args:
+        site_id:            Site to analyse
+        priority_threshold: Asset priority cutoff (1=highest). Default 2.
+    """
+    if not site_id:
+        return _error("site_id is required", "VALIDATION_ERROR")
+
+    start = time.monotonic()
+
+    try:
+        client = await get_connected_client()
+        # Step 1 — fetch critical assets at this site (priority ≤ threshold).
+        asset_params = client.build_oslc_query(
+            where=f'siteid="{oslc_escape(site_id)}"',
+            select="assetnum,description,siteid,priority,status,sparepart",
+            page_size=200,
+        )
+        a_data = await client.get("/os/mxasset", params=asset_params)
+        site_u = site_id.upper()
+        critical_assets = [
+            a for a in a_data.get("member", [])
+            if (a.get("siteid") or "").upper() == site_u
+            and isinstance(a.get("priority"), (int, float))
+            and a.get("priority") is not None
+            and float(a["priority"]) <= priority_threshold
+        ]
+
+        # Step 2 — fetch all inventory at this site to look up reorder status.
+        inv_params = client.build_oslc_query(
+            where=f'siteid="{oslc_escape(site_id)}"',
+            select="itemnum,siteid,storeloc,curbal,reorderpoint,minlevel",
+            page_size=200,
+        )
+        inv_data = await client.get(INV_OS, params=inv_params)
+        inv_index: Dict[str, Dict[str, Any]] = {}
+        for r in inv_data.get("member", []):
+            if (r.get("siteid") or "").upper() != site_u:
+                continue
+            key = (r.get("itemnum") or "").upper()
+            if key:
+                # Keep best (lowest) curbal record per item — most-stocked-out wins.
+                prev = inv_index.get(key)
+                if prev is None or float(r.get("curbal") or 0) < float(prev.get("curbal") or 0):
+                    inv_index[key] = r
+
+        annotated = []
+        spare_data_seen = False
+        for a in critical_assets:
+            spares = a.get("sparepart") or []
+            if spares:
+                spare_data_seen = True
+            spare_status = []
+            stockout_count = 0
+            for sp in spares:
+                item_num = (sp.get("itemnum") or "").upper()
+                inv = inv_index.get(item_num)
+                cur = float(inv.get("curbal") or 0) if inv else 0
+                rop = float(inv.get("reorderpoint") or 0) if inv else 0
+                below_rop = bool(inv and cur <= rop)
+                if below_rop:
+                    stockout_count += 1
+                spare_status.append(
+                    {
+                        "itemnum": sp.get("itemnum"),
+                        "qty_required": sp.get("quantity") or sp.get("qty"),
+                        "in_stock": cur,
+                        "reorder_point": rop,
+                        "below_reorder_point": below_rop,
+                        "in_inventory_master": inv is not None,
+                    }
+                )
+            annotated.append(
+                {
+                    "assetnum": a.get("assetnum"),
+                    "description": a.get("description"),
+                    "priority": a.get("priority"),
+                    "status": a.get("status"),
+                    "spare_count": len(spares),
+                    "spares_below_reorder_point": stockout_count,
+                    "spares": spare_status,
+                }
+            )
+
+        duration_ms = int((time.monotonic() - start) * 1000)
+        return _envelope(
+            {
+                "site_id": site_id,
+                "priority_threshold": priority_threshold,
+                "critical_asset_count": len(critical_assets),
+                "data_unavailable": (len(critical_assets) > 0 and not spare_data_seen),
+                "data_unavailable_note": (
+                    "Critical assets found but no asset.sparepart child rows returned by OSLC. "
+                    "Ask your Maximo admin to enable sparepart on the mxasset object structure."
+                ) if (len(critical_assets) > 0 and not spare_data_seen) else None,
+                "critical_assets": annotated,
+            },
+            duration_ms=duration_ms, record_count=len(critical_assets),
+        )
+    except (MaximoAPIError, MaximoAuthError) as exc:
+        return _error(str(exc))
+    except Exception as exc:
+        return _error(f"Unexpected error [{type(exc).__name__}]: {exc!r}", "INTERNAL_ERROR")
