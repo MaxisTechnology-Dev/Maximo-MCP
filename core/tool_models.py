@@ -332,6 +332,61 @@ class SummarizeAssetHealthArgs(StrictBaseModel):
     site_id: str
 
 
+# ── Wave 8: AI moat (LLM-enhanced with deterministic fallbacks) ───────────────
+
+class GenerateWorkorderSummaryArgs(StrictBaseModel):
+    wonum: str
+    site_id: str
+
+
+class AutoClassifyFailureArgs(StrictBaseModel):
+    description: str = Field(..., min_length=1, max_length=2000)
+    asset_num: Optional[str] = None
+    site_id: Optional[str] = None
+
+
+class ChatWithAssetArgs(StrictBaseModel):
+    asset_num: str
+    site_id: str
+    question: str = Field(..., min_length=1, max_length=2000)
+    lookback_days: int = Field(default=365, ge=1, le=3650)
+
+
+class RecommendPmOptimizationArgs(StrictBaseModel):
+    asset_num: str
+    site_id: str
+    period_months: int = Field(default=24, ge=1, le=120)
+
+
+class PredictFailureWindowArgs(StrictBaseModel):
+    asset_num: str
+    site_id: str
+    lookback_months: int = Field(default=24, ge=1, le=120)
+
+
+class GenerateRunbookFromHistoryArgs(StrictBaseModel):
+    asset_num: str
+    site_id: str
+    problem_description: str = Field(..., min_length=1, max_length=2000)
+    lookback_months: int = Field(default=36, ge=1, le=120)
+
+
+# ── Wave 9: spatial / GIS ─────────────────────────────────────────────────────
+
+class FindAssetsNearLocationArgs(StrictBaseModel):
+    latitude: float = Field(..., ge=-90.0, le=90.0)
+    longitude: float = Field(..., ge=-180.0, le=180.0)
+    radius_km: float = Field(default=10.0, gt=0.0, le=20000.0)
+    site_id: Optional[str] = None
+    max_results: int = Field(default=50, ge=1, le=500)
+
+
+class GetRouteForTechnicianArgs(StrictBaseModel):
+    labor_code: str
+    site_id: str
+    max_workorders: int = Field(default=20, ge=1, le=100)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # REPORTING
 # ══════════════════════════════════════════════════════════════════════════════
@@ -405,6 +460,119 @@ class ListIncidentsArgs(_Paginated):
 class GetComplianceDashboardArgs(StrictBaseModel):
     site_id: str
     days_ahead: int = Field(default=30, ge=1, le=3650)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# INDUSTRY VERTICALS — PHARMA / OIL & GAS / MFG / UTILITIES / HEALTHCARE / TRANSPORT
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Pharma / life sciences ────────────────────────────────────────────────────
+
+class GetCalibrationAuditTrailArgs(StrictBaseModel):
+    asset_num: str
+    site_id: str
+    period_months: int = Field(default=12, ge=1, le=120)
+
+
+class ListCleanroomAssetsArgs(StrictBaseModel):
+    site_id: str
+    classification_keyword: str = "CLEANROOM"
+
+
+class GetGxpComplianceStatusArgs(StrictBaseModel):
+    site_id: str
+
+
+# ── Oil & gas ─────────────────────────────────────────────────────────────────
+
+class GetTurnaroundStatusArgs(StrictBaseModel):
+    site_id: str
+    parent_wonum: Optional[str] = None
+    top_n: int = Field(default=5, ge=1, le=50)
+
+
+class ListPressureVesselsDueArgs(StrictBaseModel):
+    site_id: str
+    days_ahead: int = Field(default=90, ge=1, le=3650)
+    classification_keyword: str = "VESSEL"
+
+
+class GetLiftingRegisterArgs(StrictBaseModel):
+    site_id: str
+    period_months: int = Field(default=12, ge=1, le=120)
+    keyword: str = "LIFT"
+
+
+# ── Manufacturing ─────────────────────────────────────────────────────────────
+
+class GetOeeArgs(StrictBaseModel):
+    site_id: str
+    asset_num: Optional[str] = None
+    period_days: int = Field(default=30, ge=1, le=3650)
+
+
+class GetProductionLineStatusArgs(StrictBaseModel):
+    site_id: str
+    line_location: Optional[str] = None
+
+
+class ListChangeoverWorkordersArgs(StrictBaseModel):
+    site_id: str
+    period_months: int = Field(default=3, ge=1, le=120)
+
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+
+class GetOutageImpactAnalysisArgs(StrictBaseModel):
+    asset_num: str
+    site_id: str
+
+
+class ListGridZoneAssetsArgs(StrictBaseModel):
+    site_id: str
+    zone_location: str
+
+
+class GetReliabilityIndicesArgs(StrictBaseModel):
+    site_id: str
+    period_months: int = Field(default=12, ge=1, le=120)
+
+
+# ── Healthcare ────────────────────────────────────────────────────────────────
+
+class ListMedicalDevicesDueArgs(StrictBaseModel):
+    site_id: str
+    days_ahead: int = Field(default=30, ge=1, le=3650)
+    classification_keyword: str = "MEDICAL"
+
+
+class GetDeviceLifecycleStatusArgs(StrictBaseModel):
+    site_id: str
+    asset_num: Optional[str] = None
+
+
+class GetEnvironmentOfCareStatusArgs(StrictBaseModel):
+    site_id: str
+
+
+# ── Transportation ────────────────────────────────────────────────────────────
+
+class GetFleetReadinessArgs(StrictBaseModel):
+    site_id: str
+    asset_type: Optional[str] = None
+
+
+class ListMileageBasedPmDueArgs(StrictBaseModel):
+    site_id: str
+    threshold_pct: float = Field(default=85.0, ge=0.0, le=100.0)
+    meter_keyword: str = "ODOM"
+
+
+class GetFuelConsumptionTrendArgs(StrictBaseModel):
+    asset_num: str
+    site_id: str
+    period_days: int = Field(default=90, ge=1, le=3650)
+    meter_keyword: str = "FUEL"
 
 
 # ══════════════════════════════════════════════════════════════════════════════

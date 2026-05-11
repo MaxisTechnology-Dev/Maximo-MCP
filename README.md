@@ -12,7 +12,85 @@ This project now exposes:
 - A hosted HTTP/SSE mode for remote MCP access.
 - A FastAPI tool layer for OpenAI, Gemini, Grok, and custom orchestrators.
 
-The current stable surface is `69` public tools across assets, asset reliability (failure classes, meter readings, criticality, warranty status), work orders, work order planning (job plan detail, actuals vs planned, schedule calendar, cost estimate, cost breakdown), service requests, job plans, inventory (item master, storerooms, valuation, critical-spares check), purchasing (POs, requisitions, vendors, spend analysis), labor (crafts, available-technician finder), locations, reporting (failure Pareto, bad actor assets, Excel + PDF export), AI intelligence (anomaly detection, root cause, health scoring), compliance & EHS (calibrations due, inspections due, permits, certifications expiring, incidents, compliance dashboard), schema discovery, and administration.
+See [CHANGELOG.md](CHANGELOG.md) for the per-version release history (64 net-new tools across waves 1–9).
+
+The current stable surface is **95 public tools** across 21 categories. Every tool ships with a strict Pydantic input model (`extra="forbid"`).
+
+> When a customer's Maximo doesn't have a particular vertical's data populated (no oil-and-gas turnarounds, no transportation fleet, no Spatial coordinates, etc.), every tool returns `data_unavailable=True` with a **user-friendly note explaining what's missing and what an admin can do**. Never a cryptic 400/404.
+
+### Maximo version compatibility
+
+The integration suite (64 net-new tools across 8 wave smoke tests) is verified end-to-end against **Maximo 7.6.x with the mxapi integration extensions** (the API patch pack — `mxapi*` object structures published).
+
+| Maximo build | Status | Notes |
+|---|---|---|
+| Maximo 7.6.x with mxapi extensions | ✅ **Verified live** (8/8 wave smokes pass in ~3.5 minutes) | The configuration we test against |
+| Maximo 7.6.x without mxapi extensions | ✅ Should work | Multi-candidate `mx*` → `mxapi*` falls back to `mx*` paths cleanly |
+| MAS 8.x (Manage on RHOCP) | ⚠️ Should work, not tested | Both `mx*` and `mxapi*` published; auth flow may need `MCP_AUTH_MODE=jwt` for MAS SSO |
+| MAS 9.x (Manage on RHOCP) | ⚠️ Should work, not tested | `mxapi*` is primary; same auth caveat |
+
+The codebase is defensively designed for cross-version use:
+- Multi-candidate OS endpoints (`tools/*.py` constants like `JP_OS_CANDIDATES`, `LABOR_OS_CANDIDATES`) iterate `mx*` first then `mxapi*` and fall through 404s
+- Single-condition WHERE + Python post-filter (defensive against the most restrictive build encountered — see [`compound_where_drops_connection`](memory))
+- `+field` / `-field` orderBy direction prefix (strict OSLC v2 spec — works on every build)
+- Graceful `data_unavailable=True` flag with admin-action note when an OSLC object structure isn't published on the customer's deployment
+
+| Category | Tools | What it gives you |
+|---|---:|---|
+| Assets | 9 | Lifecycle, history, downtime / MTTR / MTBF, search, criticality matrix, warranty buckets, failure-class hierarchy, meter readings |
+| Work orders | 8 | List / get / KPIs, task breakdown, planned-vs-actual variance, cost breakdown, schedule calendar, "my assigned WOs" |
+| Job plans | 3 | Catalog list, full plan with embedded tasks/labor/materials/tools, cost estimate from job plan |
+| Service requests | 2 | List + get — front-door intake before WOs |
+| Inventory | 8 | Stock check, low-stock list, reorder recs, item master, storeroom catalog, total valuation, critical-spares risk |
+| Purchasing | 6 | POs (list + get), purchase requisitions, vendors (list + performance), spend analysis by vendor / status / worktype |
+| Labor | 5 | List labor / crews / crafts, utilization, **available-technician finder** (least-busy first) |
+| Locations | 3 | List + get + hierarchy tree |
+| Reporting | 6 | Maintenance KPI dashboard, failure Pareto, bad-actor assets, Excel + PDF export, Carbon HTML table |
+| AI intelligence | 4 | NL-to-OSLC, anomaly detection (>2σ), root-cause suggestion, asset health score |
+| **AI moat** *(Wave 8)* | 6 | WO summary, auto-classify failure, **chat with asset**, PM optimization, predict failure window, **runbook generation** — every tool LLM-enhanced with statistical/rule-based fallback |
+| **Spatial / GIS** *(Wave 9)* | 2 | Find assets near a lat/lon, optimised technician routing — graceful "Spatial not installed" fallback when coordinates aren't populated |
+| Compliance & EHS | 6 | Calibrations / inspections / permits / certifications-expiring / incidents / **compliance dashboard** |
+| Pharma | 3 | Calibration audit trail (FDA), cleanroom assets, GxP risk score |
+| Oil & Gas | 3 | Turnaround status, pressure-vessel inspections, lifting register |
+| Manufacturing | 3 | OEE (Availability), production-line status, changeover (SMED) WOs |
+| Utilities | 3 | Outage impact analysis, grid-zone assets, SAIDI/SAIFI proxies |
+| Healthcare | 3 | Medical-device PM due, device lifecycle (NEW/STABLE/AGING/EOL), JC Environment of Care |
+| Transportation | 3 | Fleet readiness %, mileage-based PM due, fuel consumption trend with spike detection |
+| Schema / Admin | 8 | Object-structure discovery, schema details, OSLC query validation, code generation, users, audit log, event subscriptions |
+| Core | 1 | `health_check` — connectivity probe + tool count |
+
+Every read tool returns a structured envelope (`success / data / metadata`). Tools that need data their Maximo build doesn't expose surface a `data_unavailable: true` flag with an admin-action note rather than failing silently. Write tools ship `# DISABLED` by default.
+
+### Quick-start prompts
+
+Once connected to Claude Desktop / Cursor / Code, try:
+
+```
+Use maximo mcp. Asset 1001 isn't behaving — pull its details, recent work-order
+history, and meter readings for the last 90 days.
+
+Use maximo mcp. Run the compliance dashboard for site BEDFORD, then list the top
+5 bad-actor assets and any calibrations overdue right now.
+
+Use maximo mcp. I'm new to BEDFORD as planner — show me what job plans we have,
+estimate cost for one, and find me an available welder.
+
+Use maximo mcp. QBR slides due Friday. Export work orders to Excel + asset
+report to PDF, plus the maintenance KPI dashboard for the cover slide.
+
+Use maximo mcp. Quarterly EHS review — run compliance dashboard, list calibrations
+due in 90 days, and certifications expiring in 60.
+
+Use maximo mcp. Pump 1001 has been intermittent. Predict its next failure window,
+recommend whether we should tune its PM frequency, and generate a runbook for the
+last "grinding noise" complaint based on what we did before.
+
+Use maximo mcp. Summarize WO 6540 for tomorrow's shift handover, then auto-classify
+the failure code from this complaint: "intermittent grinding noise during operation".
+
+Use maximo mcp. Chat with asset 1001: when did it last fail, what was the root cause,
+and how often does it break?
+```
 
 ## Responsible Use
 

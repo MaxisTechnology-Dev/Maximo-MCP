@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "maximo-enterprise-mcp"
-version = "1.0.0"
+version = "1.1.0"
 description = "An MCP server for IBM Maximo Asset Management, by Maxis Technology — stable tool surface for MCP clients and hosted API use."
 readme = "README.md"
 requires-python = ">=3.11"

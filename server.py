@@ -38,6 +38,9 @@ import tools.admin as admin
 import tools.schema_dev as schema_dev
 import tools.integrations as integrations
 import tools.compliance as compliance
+import tools.verticals as verticals
+import tools.ai_moat as ai_moat
+import tools.spatial as spatial
 
 # ── Logging setup ─────────────────────────────────────────────────────────────
 settings = get_settings()
@@ -611,6 +614,77 @@ async def summarize_asset_health(asset_num: str, site_id: str) -> Dict[str, Any]
     return await ai.summarize_asset_health(asset_num, site_id)
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# WAVE 8 — AI MOAT TOOLS (LLM-enhanced; rule-based / statistical fallbacks)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+async def generate_workorder_summary(wonum: str, site_id: str) -> Dict[str, Any]:
+    """Natural-language summary of a work order — exec-ready paragraph plus structured timeline / resolution / costs."""
+    return await ai_moat.generate_workorder_summary(wonum, site_id)
+
+
+@mcp.tool()
+async def auto_classify_failure(
+    description: str, asset_num: Optional[str] = None, site_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Pick the best-fit Maximo failure code from a free-text description (LLM + keyword overlap fallback)."""
+    return await ai_moat.auto_classify_failure(description, asset_num, site_id)
+
+
+@mcp.tool()
+async def chat_with_asset(
+    asset_num: str, site_id: str, question: str, lookback_days: int = 365,
+) -> Dict[str, Any]:
+    """Conversational Q&A over an asset's full Maximo context — WO history + downtime + meters with WO citations."""
+    return await ai_moat.chat_with_asset(asset_num, site_id, question, lookback_days)
+
+
+@mcp.tool()
+async def recommend_pm_optimization(
+    asset_num: str, site_id: str, period_months: int = 24,
+) -> Dict[str, Any]:
+    """Tune PM frequency per asset based on actual failure rate vs PM cycles — INCREASE / DECREASE / KEEP per PM."""
+    return await ai_moat.recommend_pm_optimization(asset_num, site_id, period_months)
+
+
+@mcp.tool()
+async def predict_failure_window(
+    asset_num: str, site_id: str, lookback_months: int = 24,
+) -> Dict[str, Any]:
+    """Statistical next-failure projection from MTBF and time since last failure — HIGH / MEDIUM / LOW urgency."""
+    return await ai_moat.predict_failure_window(asset_num, site_id, lookback_months)
+
+
+@mcp.tool()
+async def generate_runbook_from_history(
+    asset_num: str, site_id: str, problem_description: str, lookback_months: int = 36,
+) -> Dict[str, Any]:
+    """Synthesize a step-by-step runbook from past WO resolutions on this and similar-type assets."""
+    return await ai_moat.generate_runbook_from_history(asset_num, site_id, problem_description, lookback_months)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# WAVE 9 — SPATIAL / GIS TOOLS (graceful when Maximo Spatial isn't installed)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+async def find_assets_near_location(
+    latitude: float, longitude: float, radius_km: float = 10.0,
+    site_id: Optional[str] = None, max_results: int = 50,
+) -> Dict[str, Any]:
+    """[Spatial] Find assets within a radius of a lat/lon. Tries multiple coordinate-field conventions; returns a friendly data_unavailable message when none are populated."""
+    return await spatial.find_assets_near_location(latitude, longitude, radius_km, site_id, max_results)
+
+
+@mcp.tool()
+async def get_route_for_technician(
+    labor_code: str, site_id: str, max_workorders: int = 20,
+) -> Dict[str, Any]:
+    """[Spatial] Daily route for a technician's open WOs — greedy nearest-neighbour when coords exist, priority-ordered fallback when they don't."""
+    return await spatial.get_route_for_technician(labor_code, site_id, max_workorders)
+
+
 # DISABLED — AI tool (SKIPPED_COMPLEX)
 # @mcp.tool()
 async def search_maximo_knowledge(query: str, doc_type: str = "all") -> Dict[str, Any]:
@@ -890,6 +964,144 @@ async def list_incidents(
 async def get_compliance_dashboard(site_id: str, days_ahead: int = 30) -> Dict[str, Any]:
     """Site-wide compliance dashboard: calibrations + inspections + permits + certifications + incidents. Manager role required."""
     return await compliance.get_compliance_dashboard(site_id, days_ahead)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# VERTICAL TOOLS — pharma, oil & gas, manufacturing, utilities, healthcare, transportation
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Pharma / life sciences ────────────────────────────────────────────────────
+
+@mcp.tool()
+async def get_calibration_audit_trail(asset_num: str, site_id: str, period_months: int = 12) -> Dict[str, Any]:
+    """[Pharma] Chronological calibration history for an asset — what FDA/GxP auditors ask for."""
+    return await verticals.get_calibration_audit_trail(asset_num, site_id, period_months)
+
+
+@mcp.tool()
+async def list_cleanroom_assets(site_id: str, classification_keyword: str = "CLEANROOM") -> Dict[str, Any]:
+    """[Pharma] Assets located in cleanrooms (GMP / GxP environment-monitoring)."""
+    return await verticals.list_cleanroom_assets(site_id, classification_keyword)
+
+
+@mcp.tool()
+async def get_gxp_compliance_status(site_id: str) -> Dict[str, Any]:
+    """[Pharma] GxP / FDA compliance rollup: overdue calibrations + expired certs + open incidents → risk score."""
+    return await verticals.get_gxp_compliance_status(site_id)
+
+
+# ── Oil & gas ─────────────────────────────────────────────────────────────────
+
+@mcp.tool()
+async def get_turnaround_status(
+    site_id: str, parent_wonum: Optional[str] = None, top_n: int = 5,
+) -> Dict[str, Any]:
+    """[Oil & Gas] Turnaround (TAR) status — drill into a parent WO's children, or list top-N parents."""
+    return await verticals.get_turnaround_status(site_id, parent_wonum, top_n)
+
+
+@mcp.tool()
+async def list_pressure_vessels_due(
+    site_id: str, days_ahead: int = 90, classification_keyword: str = "VESSEL",
+) -> Dict[str, Any]:
+    """[Oil & Gas] Pressure vessel inspections coming due within window."""
+    return await verticals.list_pressure_vessels_due(site_id, days_ahead, classification_keyword)
+
+
+@mcp.tool()
+async def get_lifting_register(
+    site_id: str, period_months: int = 12, keyword: str = "LIFT",
+) -> Dict[str, Any]:
+    """[Oil & Gas] Crane / lifting operations log — WOs matching LIFT/CRANE/HOIST keyword."""
+    return await verticals.get_lifting_register(site_id, period_months, keyword)
+
+
+# ── Manufacturing ─────────────────────────────────────────────────────────────
+
+@mcp.tool()
+async def get_oee(
+    site_id: str, asset_num: Optional[str] = None, period_days: int = 30,
+) -> Dict[str, Any]:
+    """[Manufacturing] Overall Equipment Effectiveness — Availability solid; Performance/Quality flagged when MES data absent."""
+    return await verticals.get_oee(site_id, asset_num, period_days)
+
+
+@mcp.tool()
+async def get_production_line_status(site_id: str, line_location: Optional[str] = None) -> Dict[str, Any]:
+    """[Manufacturing] Open WOs and downtime per location subtree."""
+    return await verticals.get_production_line_status(site_id, line_location)
+
+
+@mcp.tool()
+async def list_changeover_workorders(site_id: str, period_months: int = 3) -> Dict[str, Any]:
+    """[Manufacturing] SMED / changeover WOs with average duration for drift detection."""
+    return await verticals.list_changeover_workorders(site_id, period_months)
+
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+
+@mcp.tool()
+async def get_outage_impact_analysis(asset_num: str, site_id: str) -> Dict[str, Any]:
+    """[Utilities] Downstream impact of an asset outage — child assets + downstream locations."""
+    return await verticals.get_outage_impact_analysis(asset_num, site_id)
+
+
+@mcp.tool()
+async def list_grid_zone_assets(site_id: str, zone_location: str) -> Dict[str, Any]:
+    """[Utilities] Every asset in a grid zone (location hierarchy)."""
+    return await verticals.list_grid_zone_assets(site_id, zone_location)
+
+
+@mcp.tool()
+async def get_reliability_indices(site_id: str, period_months: int = 12) -> Dict[str, Any]:
+    """[Utilities] SAIDI / SAIFI proxies from outage WOs."""
+    return await verticals.get_reliability_indices(site_id, period_months)
+
+
+# ── Healthcare ────────────────────────────────────────────────────────────────
+
+@mcp.tool()
+async def list_medical_devices_due(
+    site_id: str, days_ahead: int = 30, classification_keyword: str = "MEDICAL",
+) -> Dict[str, Any]:
+    """[Healthcare] Medical-device assets with PM/calibration/inspection coming due."""
+    return await verticals.list_medical_devices_due(site_id, days_ahead, classification_keyword)
+
+
+@mcp.tool()
+async def get_device_lifecycle_status(site_id: str, asset_num: Optional[str] = None) -> Dict[str, Any]:
+    """[Healthcare] Lifecycle bucket (NEW / STABLE / AGING / EOL) by age from installdate."""
+    return await verticals.get_device_lifecycle_status(site_id, asset_num)
+
+
+@mcp.tool()
+async def get_environment_of_care_status(site_id: str) -> Dict[str, Any]:
+    """[Healthcare] Joint Commission EOC rollup. Manager role required."""
+    return await verticals.get_environment_of_care_status(site_id)
+
+
+# ── Transportation ────────────────────────────────────────────────────────────
+
+@mcp.tool()
+async def get_fleet_readiness(site_id: str, asset_type: Optional[str] = None) -> Dict[str, Any]:
+    """[Transportation] Fleet readiness — vehicle status mix and ready-vehicle %."""
+    return await verticals.get_fleet_readiness(site_id, asset_type)
+
+
+@mcp.tool()
+async def list_mileage_based_pm_due(
+    site_id: str, threshold_pct: float = 85.0, meter_keyword: str = "ODOM",
+) -> Dict[str, Any]:
+    """[Transportation] PMs tracked against odometer / mileage meter."""
+    return await verticals.list_mileage_based_pm_due(site_id, threshold_pct, meter_keyword)
+
+
+@mcp.tool()
+async def get_fuel_consumption_trend(
+    asset_num: str, site_id: str, period_days: int = 90, meter_keyword: str = "FUEL",
+) -> Dict[str, Any]:
+    """[Transportation] Fuel-meter consumption trend with daily rate and spike detection."""
+    return await verticals.get_fuel_consumption_trend(asset_num, site_id, period_days, meter_keyword)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

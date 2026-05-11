@@ -132,23 +132,26 @@ Supported transports:
 | `http` | HTTP SSE (Server-Sent Events) | Docker, web clients, multi-user |
 
 #### Tool Layer (`tools/`)
-12 domain modules, each a plain Python module of `async def` functions:
+14 domain modules, each a plain Python module of `async def` functions. Every tool registered in `core/tool_catalog.py` has a strict `extra="forbid"` Pydantic input model in `core/tool_models.py`.
 
-| Module | Domain | Tools |
+| Module | Domain | Active tools |
 |---|---|---:|
-| `assets.py` | Asset lifecycle | 7 |
-| `workorders.py` | Work order management | 8 |
-| `pm_scheduling.py` | Preventive maintenance | 4 |
-| `inventory.py` | Storeroom & materials | 5 |
-| `purchasing.py` | POs & vendor management | 4 |
-| `labor.py` | Technicians & crews | 3 |
-| `locations.py` | Operational locations | 3 |
-| `ai_intelligence.py` | AI/ML analytics | 5 |
-| `reporting.py` | Dashboards & exports | 4 |
-| `admin.py` | Users, groups, audit | 4 |
-| `schema_dev.py` | Schema discovery & codegen | 5 |
-| `integrations.py` | Events, IoT, webhooks | 4 |
-| `server.py` | Connectivity | 1 (`health_check`) |
+| `assets.py` | Asset lifecycle, reliability, warranty | 9 |
+| `workorders.py` | Work orders, job plans, scheduler, costs | 13 |
+| `pm_scheduling.py` | Preventive maintenance | (read-only on demo Maximo) |
+| `inventory.py` | Stock, item master, storerooms, valuation, critical spares | 8 |
+| `purchasing.py` | POs, PRs, vendors, spend analysis | 6 |
+| `labor.py` | Labor, crews, crafts, availability finder | 5 |
+| `locations.py` | Operational locations + hierarchy | 3 |
+| `ai_intelligence.py` | NL-to-OSLC, anomaly detection, RCA, health scoring | 4 |
+| `reporting.py` | KPI dashboards, Pareto, bad-actor, Excel + PDF export | 6 |
+| `admin.py` | Users, audit log | 3 |
+| `schema_dev.py` | Schema discovery, OSLC validation, code generation | 4 |
+| `integrations.py` | Events, IoT, webhooks | 1 |
+| `compliance.py` | Calibrations, inspections, permits, certs, incidents, dashboard | 6 |
+| `verticals.py` | Pharma + Oil & Gas + Mfg + Utilities + Healthcare + Transport | 18 |
+| `server.py` | Health check | 1 |
+| **Total** | | **87** |
 
 All tool functions return a consistent response envelope:
 ```json
@@ -404,65 +407,122 @@ Ensure `.env` is present in the project root.
 
 ### 3.2 Using Tools — Example Prompts
 
-#### Asset Management
+These are the kinds of asks practitioners run against the MCP. Every prompt naturally chains 2–4 tools the LLM picks up automatically.
+
+#### Asset management & reliability
 
 ```
 "List all assets at site BEDFORD"
-"Show me pump P-101 details at site WW"
-"Search for all compressors at site PLANT1"
-"What's the maintenance history for asset A-2050 over the last 6 months?"
-"Calculate MTBF and availability for asset PUMP-007 at BEDFORD"
+"Show me asset 1001 details at BEDFORD plus its work-order history and meter readings"
+"Calculate MTBF, MTTR, and availability for PUMP-007 at BEDFORD over 12 months"
+"Run an asset criticality matrix for BEDFORD and summarize health for the top 5"
+"Pull the failure-class hierarchy under PUMPS"
+"Show the warranty status of all BEDFORD assets — bucket by EXPIRED / EXPIRING_SOON / ACTIVE"
 ```
 
-#### Work Order Operations
+#### Work orders, planning & scheduling
 
 ```
-"Create a corrective maintenance work order for asset P-101 at BEDFORD with priority 2"
-"Show all open work orders for site WW"
-"Approve work order WO10042 at site BEDFORD"
-"Assign technician JSMITH to work order WO10042 for 4 hours"
-"Close work order WO10042 with 3.5 actual hours, resolution: bearing replaced"
-"What are the KPI metrics for work orders at BEDFORD this quarter?"
+"Show all open work orders for site BEDFORD this quarter"
+"Show me my assigned work orders for today and break down the highest-priority one"
+"Pull the schedule calendar for next week at BEDFORD and find me an available welder"
+"Compare estimated vs actual cost for WO 1119"
+"Pull job plan '12 MPH RED' with full task / labor / material breakdown"
+"Estimate the cost of executing job plan PUMP-SEAL-REPLACE before issuing the WO"
 ```
 
-#### Preventive Maintenance
+#### Inventory, purchasing & finance
 
 ```
-"List all active PM schedules for site WW"
-"Forecast PM workload for the next 3 months at BEDFORD"
-"Generate PM work orders for the next 30 days at site WW"
-"Update PM schedule PM-042 to run every 90 days"
+"Show low-stock items at BEDFORD and the open POs that should replenish them"
+"Run an inventory valuation for BEDFORD — give me the top 20 items by line value"
+"Critical-spares check: for priority-1/2 assets at BEDFORD, are required spares in stock?"
+"List purchase requisitions waiting for approval at BEDFORD"
+"Run spend analysis on BEDFORD for the last 24 months grouped by vendor"
+"Pull vendor performance for whoever's our top spend"
 ```
 
-#### Inventory & Purchasing
+#### AI intelligence & root cause
 
 ```
-"Show low stock items at site BEDFORD"
-"What are the reorder recommendations for site WW?"
-"Check stock level for item SEAL-007 in storeroom CENTRAL at BEDFORD"
-"Create a purchase order for 10 units of PUMP-SEAL-001 from vendor ABC-SUPPLY"
-"What is vendor ACME-PARTS' on-time delivery rate for the last 12 months?"
-```
-
-#### AI & Analytics
-
-```
-"Detect anomalies in asset P-101's failure history at BEDFORD over 90 days"
-"Suggest root cause for: pump P-101 showing unexpected vibration and overheating"
+"Detect statistical anomalies in PUMP-007's failure history over the last 90 days"
+"Suggest a root cause for: pump P-101 showing unexpected vibration and overheating"
 "Generate a health score summary for asset COMP-001 at BEDFORD"
-"Translate to OSLC: show me all priority 1 work orders created this week"
-"Search Maximo documentation for: how to set up PM schedules"
+"Translate to OSLC: show me all priority 1 work orders created this week in BEDFORD"
+"Run a failure Pareto for BEDFORD and tell me what 20% of failure modes cause 80% of work"
+"Show the top 5 bad-actor assets at BEDFORD ranked by corrective WO count and labor cost"
 ```
 
-#### Reporting
+#### Compliance & EHS
+
+```
+"Run the compliance dashboard for BEDFORD"
+"List calibrations due in the next 60 days"
+"List labor certifications expiring in the next 90 days"
+"Show open safety incidents at BEDFORD this quarter"
+"List inspections due and overdue for site BEDFORD"
+```
+
+#### Industry verticals
+
+**Pharma**
+
+```
+"Pull the calibration audit trail for asset 1001 at BEDFORD over 24 months — FDA prep"
+"Show me cleanroom assets at BEDFORD"
+"Run GxP compliance status — give me the risk score and rating"
+```
+
+**Oil & gas**
+
+```
+"Show me turnaround status at BEDFORD — top 5 parents with most child WOs"
+"List pressure vessels with inspections due in the next 90 days"
+"Pull the lifting register for the last 12 months at BEDFORD"
+```
+
+**Manufacturing**
+
+```
+"Run OEE for BEDFORD over the last 30 days"
+"Show production line status for BEDFORD — open WOs and downtime per location"
+"List changeover work orders this quarter and average changeover time"
+```
+
+**Utilities**
+
+```
+"Run outage impact analysis for asset 1001 at BEDFORD — what's downstream?"
+"List every asset in grid zone BR450 at BEDFORD"
+"Compute SAIDI / SAIFI proxies for BEDFORD over the last 12 months"
+```
+
+**Healthcare**
+
+```
+"List medical devices with PM/calibration due in the next 30 days"
+"Show device lifecycle status for BEDFORD — bucket by NEW / STABLE / AGING / EOL"
+"Run Joint Commission environment-of-care rollup for BEDFORD"
+```
+
+**Transportation**
+
+```
+"Show fleet readiness at BEDFORD — what % of vehicles are operating?"
+"Which fleet vehicles have mileage-based PMs coming due?"
+"Pull the fuel consumption trend for vehicle TRACK-1 over the last 90 days"
+```
+
+#### Reporting & exports
 
 ```
 "Show the full maintenance KPI dashboard for BEDFORD for the last quarter"
-"Export all open work orders at BEDFORD to Excel"
-"Generate a PDF asset report for site WW"
+"Export all open work orders at BEDFORD to Excel for the leadership review"
+"Generate a PDF asset report for BEDFORD"
+"Render the failure Pareto as a Carbon HTML table for our internal portal"
 ```
 
-#### Schema Discovery (for developers)
+#### Schema discovery (for developers)
 
 ```
 "List all Maximo object structures containing 'asset'"
