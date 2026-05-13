@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.MaxisTechnology-Dev/maximo-mcp",
   "title": "Maximo Enterprise MCP",
-  "description": "MCP server for IBM Maximo, by Maxis Technology — assets, work orders, inventory, purchasing, labor.",
+  "description": "MCP server for IBM Maximo by Maxis Technology — 95 tools across assets, work orders, planning, scheduling, inventory, purchasing, labor, compliance, reporting, AI-powered insights (anomaly detection, root cause, chat-with-asset, runbook generation), and industry verticals (pharma, oil & gas, manufacturing, utilities, healthcare, transportation).",
   "repository": {
     "url": "https://github.com/MaxisTechnology-Dev/Maximo-MCP",
     "source": "github"
@@ -58,6 +58,18 @@
         {
           "name": "CURRENT_USER_ROLE",
           "description": "RBAC role for the session: readonly | technician | supervisor | manager | admin",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "OPENAI_API_KEY",
+          "description": "Optional. When set, the Wave-8 AI tools (chat_with_asset, generate_workorder_summary, auto_classify_failure, recommend_pm_optimization, generate_runbook_from_history) produce LLM-enhanced output. Without it they fall back to deterministic / statistical results.",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "MAXIMO_ENV",
+          "description": "Optional deployment tag (dev | staging | prod) stamped on audit records and /healthz so an operator can confirm at a glance which Maximo a container is pointed at.",
           "isRequired": false,
           "isSecret": false
         }
