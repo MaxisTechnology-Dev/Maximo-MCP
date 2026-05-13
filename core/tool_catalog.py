@@ -80,6 +80,18 @@ TOOL_METADATA: Dict[str, ToolSpec] = {
     "suggest_root_cause": ToolSpec("suggest_root_cause", "ai", "advanced", "Suggest probable root causes from failure history (LLM-enhanced when available).", tool_models.SuggestRootCauseArgs),
     "summarize_asset_health": ToolSpec("summarize_asset_health", "ai", "advanced", "Generate an asset health score (0-100) with key issues and recommendations.", tool_models.SummarizeAssetHealthArgs),
 
+    # ── Wave 8: AI moat (LLM-enhanced w/ rule-based fallback) ────────────────
+    "generate_workorder_summary": ToolSpec("generate_workorder_summary", "ai_moat", "advanced", "Natural-language summary of a work order with structured timeline + resolution.", tool_models.GenerateWorkorderSummaryArgs),
+    "auto_classify_failure": ToolSpec("auto_classify_failure", "ai_moat", "advanced", "Pick the best-fit failure code from a free-text problem description.", tool_models.AutoClassifyFailureArgs),
+    "chat_with_asset": ToolSpec("chat_with_asset", "ai_moat", "advanced", "Conversational Q&A over an asset's full WO + downtime + meter context.", tool_models.ChatWithAssetArgs),
+    "recommend_pm_optimization": ToolSpec("recommend_pm_optimization", "ai_moat", "advanced", "Tune PM frequency per asset based on actual failure rate.", tool_models.RecommendPmOptimizationArgs),
+    "predict_failure_window": ToolSpec("predict_failure_window", "ai_moat", "advanced", "Statistical next-failure projection from MTBF + time since last failure.", tool_models.PredictFailureWindowArgs),
+    "generate_runbook_from_history": ToolSpec("generate_runbook_from_history", "ai_moat", "advanced", "Synthesise a step-by-step runbook from past WO resolutions.", tool_models.GenerateRunbookFromHistoryArgs),
+
+    # ── Wave 9: spatial / GIS (graceful when Maximo Spatial absent) ──────────
+    "find_assets_near_location": ToolSpec("find_assets_near_location", "spatial", "advanced", "[Spatial] Radius search for assets around a lat/lon — falls back gracefully when no coordinate fields are populated.", tool_models.FindAssetsNearLocationArgs),
+    "get_route_for_technician": ToolSpec("get_route_for_technician", "spatial", "advanced", "[Spatial] Optimised daily route for a technician's open WOs — falls back to priority order when coords unavailable.", tool_models.GetRouteForTechnicianArgs),
+
     # ── reporting ────────────────────────────────────────────────────────────
     "get_maintenance_kpi_dashboard": ToolSpec("get_maintenance_kpi_dashboard", "reporting", "advanced", "Return a maintenance KPI dashboard.", tool_models.GetMaintenanceKpiDashboardArgs),
     "get_failure_pareto": ToolSpec("get_failure_pareto", "reporting", "advanced", "Pareto chart of failure codes by frequency.", tool_models.GetFailureParetoArgs),
@@ -121,6 +133,32 @@ TOOL_METADATA: Dict[str, ToolSpec] = {
     "list_certifications_expiring": ToolSpec("list_certifications_expiring", "compliance", "advanced", "Labor qualifications/certs expiring soon.", tool_models.ListCertificationsExpiringArgs),
     "list_incidents": ToolSpec("list_incidents", "compliance", "advanced", "Safety / HSE incidents (MXINCIDENT or SR fallback).", tool_models.ListIncidentsArgs),
     "get_compliance_dashboard": ToolSpec("get_compliance_dashboard", "compliance", "advanced", "Site-wide compliance dashboard composing the other 5 tools.", tool_models.GetComplianceDashboardArgs),
+
+    # ── industry verticals ────────────────────────────────────────────────────
+    # Pharma / life sciences
+    "get_calibration_audit_trail": ToolSpec("get_calibration_audit_trail", "pharma", "advanced", "[Pharma] Chronological calibration log for an asset (FDA/GxP audit trail).", tool_models.GetCalibrationAuditTrailArgs),
+    "list_cleanroom_assets": ToolSpec("list_cleanroom_assets", "pharma", "advanced", "[Pharma] Assets located in cleanrooms by classification keyword.", tool_models.ListCleanroomAssetsArgs),
+    "get_gxp_compliance_status": ToolSpec("get_gxp_compliance_status", "pharma", "advanced", "[Pharma] GxP compliance rollup — calibration + certs + incidents → risk score.", tool_models.GetGxpComplianceStatusArgs),
+    # Oil & gas
+    "get_turnaround_status": ToolSpec("get_turnaround_status", "oilgas", "advanced", "[Oil & Gas] Turnaround status by parent WO grouping.", tool_models.GetTurnaroundStatusArgs),
+    "list_pressure_vessels_due": ToolSpec("list_pressure_vessels_due", "oilgas", "advanced", "[Oil & Gas] Pressure-vessel inspections due within window.", tool_models.ListPressureVesselsDueArgs),
+    "get_lifting_register": ToolSpec("get_lifting_register", "oilgas", "advanced", "[Oil & Gas] Crane / lifting operations log.", tool_models.GetLiftingRegisterArgs),
+    # Manufacturing
+    "get_oee": ToolSpec("get_oee", "manufacturing", "advanced", "[Manufacturing] OEE — Availability + flagged Performance/Quality gaps.", tool_models.GetOeeArgs),
+    "get_production_line_status": ToolSpec("get_production_line_status", "manufacturing", "advanced", "[Manufacturing] Open WOs + downtime by production-line subtree.", tool_models.GetProductionLineStatusArgs),
+    "list_changeover_workorders": ToolSpec("list_changeover_workorders", "manufacturing", "advanced", "[Manufacturing] SMED / changeover WOs with avg duration.", tool_models.ListChangeoverWorkordersArgs),
+    # Utilities
+    "get_outage_impact_analysis": ToolSpec("get_outage_impact_analysis", "utilities", "advanced", "[Utilities] Downstream impact of an asset outage.", tool_models.GetOutageImpactAnalysisArgs),
+    "list_grid_zone_assets": ToolSpec("list_grid_zone_assets", "utilities", "advanced", "[Utilities] Every asset in a grid-zone location.", tool_models.ListGridZoneAssetsArgs),
+    "get_reliability_indices": ToolSpec("get_reliability_indices", "utilities", "advanced", "[Utilities] SAIDI / SAIFI proxies from outage WOs.", tool_models.GetReliabilityIndicesArgs),
+    # Healthcare
+    "list_medical_devices_due": ToolSpec("list_medical_devices_due", "healthcare", "advanced", "[Healthcare] Medical-device assets with PM/cal due.", tool_models.ListMedicalDevicesDueArgs),
+    "get_device_lifecycle_status": ToolSpec("get_device_lifecycle_status", "healthcare", "advanced", "[Healthcare] Lifecycle bucket from installdate.", tool_models.GetDeviceLifecycleStatusArgs),
+    "get_environment_of_care_status": ToolSpec("get_environment_of_care_status", "healthcare", "advanced", "[Healthcare] Joint Commission EOC rollup.", tool_models.GetEnvironmentOfCareStatusArgs),
+    # Transportation
+    "get_fleet_readiness": ToolSpec("get_fleet_readiness", "transportation", "advanced", "[Transportation] Fleet readiness % and status mix.", tool_models.GetFleetReadinessArgs),
+    "list_mileage_based_pm_due": ToolSpec("list_mileage_based_pm_due", "transportation", "advanced", "[Transportation] PMs tracked against odometer/mileage meter.", tool_models.ListMileageBasedPmDueArgs),
+    "get_fuel_consumption_trend": ToolSpec("get_fuel_consumption_trend", "transportation", "advanced", "[Transportation] Fuel consumption trend + spike detection.", tool_models.GetFuelConsumptionTrendArgs),
 }
 
 ACTIVE_TOOL_NAMES = tuple(TOOL_METADATA.keys())
