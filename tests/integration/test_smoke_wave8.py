@@ -67,7 +67,9 @@ async def _run_smoke() -> List[Tuple[str, Dict[str, Any]]]:
     site_id = "BEDFORD"
     asset_num = "1001"
 
-    # Discover a real wonum
+    # Discover a real wonum — best-effort; an empty Maximo or transport error
+    # here just means we skip the wo-dependent smoke step. We don't want a
+    # discovery hiccup to fail the entire run.
     sample_wonum: str | None = None
     try:
         wo_list = await workorders.list_workorders(site_id=site_id, page_size=5)
@@ -76,6 +78,8 @@ async def _run_smoke() -> List[Tuple[str, Dict[str, Any]]]:
             if wos:
                 sample_wonum = wos[0].get("wonum")
     except Exception:
+        # Intentionally swallowed — sample_wonum stays None and the
+        # workorder-specific smoke step will report "skipped" rather than fail.
         pass
     print(f"  site_id={site_id!r}  asset_num={asset_num!r}  sample_wonum={sample_wonum!r}")
     print("-" * 78)

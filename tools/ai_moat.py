@@ -476,6 +476,9 @@ async def chat_with_asset(
                     for r in meter_rows[:8]
                 )
         except (MaximoAPIError, MaximoAuthError):
+            # Meter data is best-effort context for the LLM. If the asset-meter
+            # OS isn't published on this Maximo, or the call 404s, we proceed
+            # without it — the chat answer just won't reference meter readings.
             pass
 
         # Rule-based answer (template — always returned)

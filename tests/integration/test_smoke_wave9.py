@@ -21,8 +21,27 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 
+# Env-var values we never want to surface in stdout / CI logs. Maximo error
+# responses can echo back parts of the auth header or user identifier; CodeQL's
+# taint analysis (correctly) flags `print(payload)` paths that could leak this.
+_SECRET_VARS = ("MAXIMO_PASSWORD", "MAXIMO_USERNAME", "MAXIMO_API_KEY",
+                "OPENAI_API_KEY", "MCP_ACCESS_TOKEN")
+
+
+def _redact(s: str) -> str:
+    """Mask known secret env-var values inside a string before printing."""
+    if not isinstance(s, str) or not s:
+        return s
+    for var in _SECRET_VARS:
+        v = os.environ.get(var, "")
+        if v and len(v) >= 3:
+            s = s.replace(v, "***REDACTED***")
+    return s
+
+
 def _truncate(value: Any, max_len: int = 240) -> str:
     s = json.dumps(value, default=str) if not isinstance(value, str) else value
+    s = _redact(s)
     return s if len(s) <= max_len else s[:max_len] + "…"
 
 
@@ -36,7 +55,7 @@ async def _call(coro) -> Tuple[bool, Dict[str, Any], int]:
 
 
 def _line(name: str, ok: bool, ms: int, note: str) -> str:
-    return f"[{'PASS' if ok else 'FAIL'}] {name:<36} {ms:>5}ms  {note}"
+    return f"[{'PASS' if ok else 'FAIL'}] {name:<36} {ms:>5}ms  {_redact(note)}"
 
 
 @pytest.mark.integration

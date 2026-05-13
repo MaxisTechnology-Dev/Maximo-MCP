@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
-import json
 
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _ROOT not in sys.path:
