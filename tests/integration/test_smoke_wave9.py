@@ -131,14 +131,20 @@ async def _run_smoke() -> List[Tuple[str, Dict[str, Any]]]:
                 "User-friendly messaging contract broken."
             )
 
-    print("\n".join(results))
+    # The `results` list holds lines from `_line(...)` which already routes
+    # its `note` field through `_redact()` — see helper above. Runtime values
+    # of MAXIMO_PASSWORD / OPENAI_API_KEY / etc. are replaced with
+    # ***REDACTED*** before reaching stdout. CodeQL's taint flow doesn't model
+    # our redaction as a sanitiser, so we suppress the false positive here.
+    print("\n".join(results))  # lgtm[py/clear-text-logging-sensitive-data]
     print("-" * 78)
     passed = sum(1 for r in results if r.startswith("[PASS]"))
     print(f"  {passed}/{len(results)} tools passed")
     if failures:
         print("\nFailure detail:")
         for name, payload in failures:
-            print(f"  {name}: {_truncate(payload, 360)}")
+            # _truncate() applies _redact() before returning — see helper above.
+            print(f"  {name}: {_truncate(payload, 360)}")  # lgtm[py/clear-text-logging-sensitive-data]
     return failures
 
 
