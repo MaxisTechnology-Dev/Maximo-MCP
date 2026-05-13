@@ -133,14 +133,12 @@ async def _run_smoke() -> List[Tuple[str, Dict[str, Any]]]:
                 "User-friendly messaging contract broken."
             )
 
-    # `results` only contains:
-    #   - "[PASS] name ms note"  where note is the caller's success-path string
-    #     (counts, IDs, structured fields — never echoed payload content)
-    #   - "[FAIL] name ms error_code=X"  where X is a fixed enum from
-    #     `payload["error_code"]` (never the message text)
-    # Nothing payload-derived reaches stdout; full payloads live only in the
-    # `failures` list which the test assertion raises as AssertionError.
-    print("\n".join(results))
+    # Print only an aggregate pass/fail count. Per-tool result lines live in
+    # the `results` list but are deliberately NOT printed — CodeQL flagged
+    # the bulk `print(results)` as a clear-text-logging sink because the
+    # taint flow analysis traces env-var reads (auth headers) all the way
+    # through to the formatted lines. Operators can still see which tools
+    # failed via the AssertionError message + per-test pytest output.
     print("-" * 78)
     passed = sum(1 for r in results if r.startswith("[PASS]"))
     print(f"  {passed}/{len(results)} tools passed")
