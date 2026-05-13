@@ -8,7 +8,6 @@ spatial data is available, OR returns geographic data when it is".
 """
 from __future__ import annotations
 import asyncio
-import json
 import os
 import sys
 import time
@@ -37,12 +36,6 @@ def _redact(s: str) -> str:
         if v and len(v) >= 3:
             s = s.replace(v, "***REDACTED***")
     return s
-
-
-def _truncate(value: Any, max_len: int = 240) -> str:
-    s = json.dumps(value, default=str) if not isinstance(value, str) else value
-    s = _redact(s)
-    return s if len(s) <= max_len else s[:max_len] + "…"
 
 
 async def _call(coro) -> Tuple[bool, Dict[str, Any], int]:
@@ -90,9 +83,18 @@ async def _run_smoke() -> List[Tuple[str, Dict[str, Any]]]:
     failures: List[Tuple[str, Dict[str, Any]]] = []
 
     def record(name, ok, payload, ms, note):
-        results.append(_line(name, ok, ms, note))
+        # On the failure path we ignore the caller-supplied note (which may
+        # echo the API error message including potentially-sensitive content)
+        # and replace it with the structured `error_code` enum only. Full
+        # payload still goes into `failures` for the assertion message, but
+        # only as part of the test failure — never via a `print()` sink.
         if not ok:
+            code = payload.get("error_code", "UNKNOWN") if isinstance(payload, dict) else "UNKNOWN"
+            safe_note = f"error_code={code}"
+            results.append(_line(name, False, ms, safe_note))
             failures.append((name, payload))
+        else:
+            results.append(_line(name, True, ms, note))
 
     # 1. find_assets_near_location — Burlington/Bedford-ish coordinates
     ok, p, ms = await _call(
@@ -105,7 +107,7 @@ async def _run_smoke() -> List[Tuple[str, Dict[str, Any]]]:
     note = (
         f"matching={d.get('matching_count')} candidates={d.get('total_candidate_assets')} "
         f"variant={d.get('coordinate_variant_used')!r} data_unav={bool(d.get('data_unavailable'))}"
-        if ok else _truncate(p.get("error") or p)
+        if ok else ""  # record() supplies a sanitized failure note from error_code
     )
     record("find_assets_near_location", ok, p, ms, note)
 
@@ -117,7 +119,7 @@ async def _run_smoke() -> List[Tuple[str, Dict[str, Any]]]:
     note = (
         f"route_len={d.get('route_length')} geographic={d.get('geographic_optimisation')} "
         f"data_unav={bool(d.get('data_unavailable_note'))}"
-        if ok else _truncate(p.get("error") or p)
+        if ok else ""  # record() supplies a sanitized failure note from error_code
     )
     record("get_route_for_technician", ok, p, ms, note)
 
@@ -131,20 +133,17 @@ async def _run_smoke() -> List[Tuple[str, Dict[str, Any]]]:
                 "User-friendly messaging contract broken."
             )
 
-    # The `results` list holds lines from `_line(...)` which already routes
-    # its `note` field through `_redact()` — see helper above. Runtime values
-    # of MAXIMO_PASSWORD / OPENAI_API_KEY / etc. are replaced with
-    # ***REDACTED*** before reaching stdout. CodeQL's taint flow doesn't model
-    # our redaction as a sanitiser, so we suppress the false positive here.
-    print("\n".join(results))  # lgtm[py/clear-text-logging-sensitive-data]
+    # `results` only contains:
+    #   - "[PASS] name ms note"  where note is the caller's success-path string
+    #     (counts, IDs, structured fields — never echoed payload content)
+    #   - "[FAIL] name ms error_code=X"  where X is a fixed enum from
+    #     `payload["error_code"]` (never the message text)
+    # Nothing payload-derived reaches stdout; full payloads live only in the
+    # `failures` list which the test assertion raises as AssertionError.
+    print("\n".join(results))
     print("-" * 78)
     passed = sum(1 for r in results if r.startswith("[PASS]"))
     print(f"  {passed}/{len(results)} tools passed")
-    if failures:
-        print("\nFailure detail:")
-        for name, payload in failures:
-            # _truncate() applies _redact() before returning — see helper above.
-            print(f"  {name}: {_truncate(payload, 360)}")  # lgtm[py/clear-text-logging-sensitive-data]
     return failures
 
 

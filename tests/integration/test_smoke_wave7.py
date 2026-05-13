@@ -1,7 +1,6 @@
 """tests/integration/test_smoke_wave7.py — Live smoke test for the 18 Wave-7 vertical tools."""
 from __future__ import annotations
 import asyncio
-import json
 import os
 import sys
 import time
@@ -30,12 +29,6 @@ def _redact(s: str) -> str:
         if v and len(v) >= 3:
             s = s.replace(v, "***REDACTED***")
     return s
-
-
-def _truncate(value: Any, max_len: int = 240) -> str:
-    s = json.dumps(value, default=str) if not isinstance(value, str) else value
-    s = _redact(s)
-    return s if len(s) <= max_len else s[:max_len] + "…"
 
 
 async def _call(coro) -> Tuple[bool, Dict[str, Any], int]:
@@ -84,6 +77,14 @@ async def _run_smoke() -> List[Tuple[str, Dict[str, Any]]]:
     failures: List[Tuple[str, Dict[str, Any]]] = []
 
     def record(name: str, ok: bool, payload: Dict[str, Any], ms: int, note: str) -> None:
+        # On the failure path we ignore the caller-supplied note (which may
+        # echo the API error message including potentially-sensitive content)
+        # and replace it with the structured `error_code` enum only. Full
+        # payload still goes into `failures` for the assertion message, but
+        # only as part of the test failure — never via a `print()` sink.
+        if not ok:
+            code = payload.get("error_code", "UNKNOWN") if isinstance(payload, dict) else "UNKNOWN"
+            note = f"error_code={code}"
         results.append(_line(name, ok, ms, note))
         if not ok:
             failures.append((name, payload))
@@ -92,7 +93,7 @@ async def _run_smoke() -> List[Tuple[str, Dict[str, Any]]]:
     ok, p, ms = await _call(verticals.get_calibration_audit_trail(asset_num, site_id, period_months=24))
     note = (
         f"cals={p['data'].get('total_calibrations')} completed={p['data'].get('completed_calibrations')}"
-        if ok else _truncate(p.get("error") or p)
+        if ok else ""  # record() supplies a sanitized failure note from error_code
     )
     record("get_calibration_audit_trail", ok, p, ms, note)
 
@@ -100,7 +101,7 @@ async def _run_smoke() -> List[Tuple[str, Dict[str, Any]]]:
     note = (
         f"cleanroom_locs={p['data'].get('matching_locations')} assets={len(p['data'].get('assets_in_cleanroom', []))} "
         f"data_unav={bool(p['data'].get('data_unavailable'))}"
-        if ok else _truncate(p.get("error") or p)
+        if ok else ""  # record() supplies a sanitized failure note from error_code
     )
     record("list_cleanroom_assets", ok, p, ms, note)
 
@@ -108,7 +109,7 @@ async def _run_smoke() -> List[Tuple[str, Dict[str, Any]]]:
     note = (
         f"risk={p['data'].get('gxp_risk_score')} rating={p['data'].get('compliance_rating')!r} "
         f"unavail={p['data'].get('data_unavailable_sections')}"
-        if ok else _truncate(p.get("error") or p)
+        if ok else ""  # record() supplies a sanitized failure note from error_code
     )
     record("get_gxp_compliance_status", ok, p, ms, note)
 
@@ -116,7 +117,7 @@ async def _run_smoke() -> List[Tuple[str, Dict[str, Any]]]:
     ok, p, ms = await _call(verticals.get_turnaround_status(site_id, top_n=3))
     note = (
         f"parent_groups={p['data'].get('total_parent_workorders')} top={len(p['data'].get('top_turnarounds', []))}"
-        if ok else _truncate(p.get("error") or p)
+        if ok else ""  # record() supplies a sanitized failure note from error_code
     )
     record("get_turnaround_status", ok, p, ms, note)
 
@@ -124,14 +125,14 @@ async def _run_smoke() -> List[Tuple[str, Dict[str, Any]]]:
     d = p.get("data", {}) if ok else {}
     note = (
         f"vessels={d.get('total_pressure_vessels')} due_in_window={d.get('inspections_due_in_window')} data_unav={bool(d.get('data_unavailable'))}"
-        if ok else _truncate(p.get("error") or p)
+        if ok else ""  # record() supplies a sanitized failure note from error_code
     )
     record("list_pressure_vessels_due", ok, p, ms, note)
 
     ok, p, ms = await _call(verticals.get_lifting_register(site_id, period_months=240))
     note = (
         f"lifts={p['data'].get('total_lift_workorders')}"
-        if ok else _truncate(p.get("error") or p)
+        if ok else ""  # record() supplies a sanitized failure note from error_code
     )
     record("get_lifting_register", ok, p, ms, note)
 
@@ -140,7 +141,7 @@ async def _run_smoke() -> List[Tuple[str, Dict[str, Any]]]:
     d = p.get("data", {}) if ok else {}
     note = (
         f"avail={d.get('availability_pct')}% downtime_hr={d.get('downtime_hours')} corrective_wos={d.get('corrective_wo_count')}"
-        if ok else _truncate(p.get("error") or p)
+        if ok else ""  # record() supplies a sanitized failure note from error_code
     )
     record("get_oee", ok, p, ms, note)
 
@@ -148,14 +149,14 @@ async def _run_smoke() -> List[Tuple[str, Dict[str, Any]]]:
     d = p.get("data", {}) if ok else {}
     note = (
         f"locations_in_scope={d.get('locations_in_scope')} open_wos={d.get('open_wos')}"
-        if ok else _truncate(p.get("error") or p)
+        if ok else ""  # record() supplies a sanitized failure note from error_code
     )
     record("get_production_line_status", ok, p, ms, note)
 
     ok, p, ms = await _call(verticals.list_changeover_workorders(site_id, period_months=240))
     note = (
         f"changeovers={p['data'].get('total_changeovers')} avg_hr={p['data'].get('avg_changeover_hours')}"
-        if ok else _truncate(p.get("error") or p)
+        if ok else ""  # record() supplies a sanitized failure note from error_code
     )
     record("list_changeover_workorders", ok, p, ms, note)
 
@@ -164,7 +165,7 @@ async def _run_smoke() -> List[Tuple[str, Dict[str, Any]]]:
     d = p.get("data", {}) if ok else {}
     note = (
         f"impact_score={d.get('impact_score')} children={d.get('child_asset_count')} downstream_locs={d.get('downstream_location_count')}"
-        if ok else _truncate(p.get("error") or p)
+        if ok else ""  # record() supplies a sanitized failure note from error_code
     )
     record("get_outage_impact_analysis", ok, p, ms, note)
 
@@ -174,7 +175,7 @@ async def _run_smoke() -> List[Tuple[str, Dict[str, Any]]]:
     d = p.get("data", {}) if ok else {}
     note = (
         f"zone={zone} locs_in_zone={d.get('locations_in_zone')} assets={d.get('asset_count')}"
-        if ok else _truncate(p.get("error") or p)
+        if ok else ""  # record() supplies a sanitized failure note from error_code
     )
     record("list_grid_zone_assets", ok, p, ms, note)
 
@@ -182,7 +183,7 @@ async def _run_smoke() -> List[Tuple[str, Dict[str, Any]]]:
     d = p.get("data", {}) if ok else {}
     note = (
         f"customers={d.get('customer_locations')} outages={d.get('outage_workorders')} saidi_min={d.get('saidi_proxy_minutes_per_customer')}"
-        if ok else _truncate(p.get("error") or p)
+        if ok else ""  # record() supplies a sanitized failure note from error_code
     )
     record("get_reliability_indices", ok, p, ms, note)
 
@@ -191,7 +192,7 @@ async def _run_smoke() -> List[Tuple[str, Dict[str, Any]]]:
     d = p.get("data", {}) if ok else {}
     note = (
         f"devices={d.get('total_medical_devices')} due={d.get('due_in_window')} data_unav={bool(d.get('data_unavailable'))}"
-        if ok else _truncate(p.get("error") or p)
+        if ok else ""  # record() supplies a sanitized failure note from error_code
     )
     record("list_medical_devices_due", ok, p, ms, note)
 
@@ -199,7 +200,7 @@ async def _run_smoke() -> List[Tuple[str, Dict[str, Any]]]:
     d = p.get("data", {}) if ok else {}
     note = (
         f"total={d.get('total_assets')} buckets={d.get('buckets')}"
-        if ok else _truncate(p.get("error") or p)
+        if ok else ""  # record() supplies a sanitized failure note from error_code
     )
     record("get_device_lifecycle_status", ok, p, ms, note)
 
@@ -207,7 +208,7 @@ async def _run_smoke() -> List[Tuple[str, Dict[str, Any]]]:
     d = p.get("data", {}) if ok else {}
     note = (
         f"score={d.get('eoc_score')} rating={d.get('rating')!r} unavail={d.get('data_unavailable_sections')}"
-        if ok else _truncate(p.get("error") or p)
+        if ok else ""  # record() supplies a sanitized failure note from error_code
     )
     record("get_environment_of_care_status", ok, p, ms, note)
 
@@ -216,7 +217,7 @@ async def _run_smoke() -> List[Tuple[str, Dict[str, Any]]]:
     d = p.get("data", {}) if ok else {}
     note = (
         f"fleet={d.get('fleet_size')} ready={d.get('ready_vehicles')} ready_pct={d.get('readiness_pct')} method={d.get('detection_method')}"
-        if ok else _truncate(p.get("error") or p)
+        if ok else ""  # record() supplies a sanitized failure note from error_code
     )
     record("get_fleet_readiness", ok, p, ms, note)
 
@@ -224,7 +225,7 @@ async def _run_smoke() -> List[Tuple[str, Dict[str, Any]]]:
     d = p.get("data", {}) if ok else {}
     note = (
         f"matched_meters={d.get('matched_meters')} data_unav={bool(d.get('data_unavailable'))}"
-        if ok else _truncate(p.get("error") or p)
+        if ok else ""  # record() supplies a sanitized failure note from error_code
     )
     record("list_mileage_based_pm_due", ok, p, ms, note)
 
@@ -232,24 +233,21 @@ async def _run_smoke() -> List[Tuple[str, Dict[str, Any]]]:
     d = p.get("data", {}) if ok else {}
     note = (
         f"readings={d.get('reading_count')} intervals={d.get('intervals_analysed')} avg_per_day={d.get('avg_consumption_per_day')} spikes={d.get('spike_count')}"
-        if ok else _truncate(p.get("error") or p)
+        if ok else ""  # record() supplies a sanitized failure note from error_code
     )
     record("get_fuel_consumption_trend", ok, p, ms, note)
 
-    # The `results` list holds lines from `_line(...)` which already routes its
-    # `note` field through `_redact()` — see helper above. Runtime values of
-    # MAXIMO_PASSWORD / OPENAI_API_KEY / etc. are replaced with ***REDACTED***
-    # before reaching stdout. CodeQL's taint flow doesn't model our redaction
-    # as a sanitiser, so we suppress the false positive here.
-    print("\n".join(results))  # lgtm[py/clear-text-logging-sensitive-data]
+    # `results` only contains:
+    #   - "[PASS] name ms note"  where note is the caller's success-path string
+    #     (counts, IDs, structured fields — never echoed payload content)
+    #   - "[FAIL] name ms error_code=X"  where X is a fixed enum from
+    #     `payload["error_code"]` (never the message text)
+    # Nothing payload-derived reaches stdout; full payloads live only in the
+    # `failures` list which the test assertion raises as AssertionError.
+    print("\n".join(results))
     print("-" * 78)
     passed = sum(1 for r in results if r.startswith("[PASS]"))
     print(f"  {passed}/{len(results)} tools passed")
-    if failures:
-        print("\nFailure detail:")
-        for name, payload in failures:
-            # _truncate() applies _redact() before returning — see helper above.
-            print(f"  {name}: {_truncate(payload, 360)}")  # lgtm[py/clear-text-logging-sensitive-data]
     return failures
 
 
